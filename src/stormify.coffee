@@ -25,11 +25,13 @@ passport.use new AnonymousStrategy
 authorizer = (store) ->
     if store.authorizer? and store.authorizer instanceof DataStore
         passport.use new BearerStrategy (token,done) ->
-            identity = store.authorizer.findRecord 'token', token
+            token = store.authorizer.findRecord 'token', token
+            identity = token.get('identity') if token instanceof DataStore.Model
+
             unless identity? and identity instanceof DataStore.Model
                 done null, false
             else
-                done null, identity, { scope: identity.scope }
+                done null, identity, { scope: identity.get('scope') }
         passport.authenticate('bearer', {session:false})
     else
         passport.authenticate('anonymous', {session:false})
@@ -71,6 +73,7 @@ getter = (store,type) -> () ->
     condition ?= @params.id
 
     return @res.send 400 unless requestor? and type?
+    return @res.send 403 if condition isnt undefined and 'all' not in @req.authInfo?.scope
 
     store.find type, condition, (err, matches) =>
         return @res.send 500, error: err if err?

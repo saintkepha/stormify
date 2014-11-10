@@ -71,7 +71,6 @@ class DataStoreModel extends SR.Data
             do (val) =>
                 @properties[key] = extend {},val
 
-
         @id = data?.id
         @id ?= uuid.v4()
         @setProperties data
@@ -84,8 +83,19 @@ class DataStoreModel extends SR.Data
             unless prop.value
                 violations.push "'#{name}' is required for #{@constructor.name}" if prop.opts?.required
             else
-                if prop.type? and prop.type isnt 'date' and prop.type isnt 'uuid' and prop.type isnt 'email' and prop.type isnt 'toggle'
-                    violations.push "'#{name}' must be a #{prop.type} and not #{typeof prop.value}" if prop.type? and typeof prop.value isnt prop.type
+                check = switch prop.type
+                    when 'string' or 'number' or 'boolean'
+                        typeof prop.value is prop.type
+                    when 'date'
+                        if typeof prop.value is 'string'
+                            prop.value = new Date(prop.value)
+                        prop.value instanceof Date
+                    when 'array'
+                        prop.value instanceof Array
+                    else
+                        true
+
+                violations.push "'#{name}' must be a #{prop.type}" if prop.type? and not check
 
                 if prop.model? and prop.value instanceof Array and prop.mode isnt 2
                     violations.push "'#{name}' cannot be an array of #{prop.model}"
@@ -114,8 +124,9 @@ class DataStoreModel extends SR.Data
         data
 
     get: (property, callback) ->
-        prop = @properties[property]
+        assert @properties.hasOwnProperty(property), "attempting to retrieve '#{property}' which doesn't exist in this model"
 
+        prop = @properties[property]
         # simple property options enforcement routine
         #
         # unique: true (for array types, ensures only unique entries)
