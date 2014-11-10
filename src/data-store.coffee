@@ -128,7 +128,10 @@ class DataStoreModel extends SR.Data
                 when prop.model? and x instanceof Array and prop.mode is 2
                     results = (@store.findRecord(prop.model,id) for id in prop.value unless id instanceof DataStoreModel).filter (e) -> e?
                     if results.length then results else x
-                when prop.model? and x instanceof DataStoreModel then x
+                when prop.model? and x instanceof DataStoreModel
+                    switch prop.mode
+                        when 1 then x
+                        when 2 then [ x ]
                 when prop.model? and x instanceof Object
                     try
                         inverse = prop.opts?.inverse
