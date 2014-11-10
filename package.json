@@ -1,6 +1,6 @@
 {
   "name": "stormify",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Stormify enables rapid web applications construction using ember style Data Stores",
   "main": "lib/stormify.js",
   "directories": {
@@ -39,7 +39,6 @@
     "node-uuid": "1.4.1",
     "passport": "0.2.1",
     "passport-anonymous": "1.0.1",
-    "stormregistry": "1.3.1",
-    "zappajs": "0.5.0"
+    "stormregistry": "1.3.1"
   }
 }
