@@ -1,7 +1,7 @@
 {
   "name": "stormify",
-  "version": "0.0.1",
-  "description": "Build storm web apps in minutes",
+  "version": "0.2.0",
+  "description": "Stormify enables rapid web applications construction using ember style Data Stores",
   "main": "lib/stormify.js",
   "directories": {
     "example": "examples",
