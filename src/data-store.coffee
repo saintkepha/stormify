@@ -122,7 +122,6 @@ class DataStoreModel extends SR.Data
 
         data = {}
         data["#{@name}"] = result
-        data.version = @version
         data
 
     get: (property, callback) ->
@@ -307,7 +306,7 @@ class DataStoreModel extends SR.Data
                     @store?.commit @
                     @clearDirty()
                     @isSaved = true
-                    callback? null, props
+                    callback? null, @
 
     destroy: (callback) ->
         # if controller associated, issue the destroy action call

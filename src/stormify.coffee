@@ -54,6 +54,8 @@ poster = (store,type) -> () ->
     requestor = @req.user
     return @next() unless requestor?
 
+    store.log?.info stormify:"poster",request:@body,"stormify.poster for '#{type}'"
+
     try
         record = store.createRecord type, @body[type]
     catch err
@@ -63,6 +65,7 @@ poster = (store,type) -> () ->
         return @res.send 500, error: err if err?
         if props?
             @req.result = record.serialize()
+            store.log?.info query:@params.id,result:@req.result, 'poster results for %s',type
             @next()
         else
             @res.send 404
@@ -72,7 +75,7 @@ getter = (store,type) -> () ->
     condition = @query.ids
     condition ?= @params.id
 
-    store.auditor?.info stormify:"getter",query:condition,"stormify.getter for '#{type}'"
+    store.log?.info stormify:"getter",query:condition,"stormify.getter for '#{type}'"
 
     return @res.send 400 unless requestor? and type?
     return @res.send 403 if condition isnt undefined and 'all' not in @req.authInfo?.scope
@@ -83,20 +86,27 @@ getter = (store,type) -> () ->
             o = {}
             o[type] = serializer(matches)
             @req.result = o
-            store.auditor?.info query:condition, result:@req.result, 'getter results for %s',type
+            store.log?.info query:condition, result:@req.result, 'getter results for %s',type
             @next()
         else
             @res.send 404
 
 putter = (store,type) -> () ->
-    requestor = @req.user
-    return @next() unless requestor? and type?
+    try
+        assert store instanceof DataStore and type? and store.entities[type]? and @body[type]?, "invalid PUT request!"
+    catch err
+        return @res.send 500, error:err
 
-    store.updateRecord type, @params.id, @body, (err,result) =>
+    requestor = @req.user
+    return @next() unless requestor?
+
+    store.log?.info stormify:"putter",request:@body,"stormify.putter for '#{type}'"
+
+    store.updateRecord type, @params.id, @body[type], (err,result) =>
         return @res.send 500, error: err if err?
-        if result?
-            @req.result = result
-            store.auditor?.debug query:@params.id,result:@req.result, 'putter results for %s',type
+        if result? and result instanceof DataStore.Model
+            @req.result = result.serialize()
+            store.log?.info query:@params.id,result:@req.result, 'putter results for %s',type
             @next()
         else
             @res.send 404
@@ -109,7 +119,7 @@ remover = (store,type) -> () ->
         return @res.send 500, error: err if err?
         if result?
             @req.result = result
-            store.auditor?.debug query:@params.id,result:@req.result, 'remover results for %s',type
+            store.log?.debug query:@params.id,result:@req.result, 'remover results for %s',type
             @next()
         else
             @res.send 404
