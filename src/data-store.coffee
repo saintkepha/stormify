@@ -129,15 +129,19 @@ class DataStoreModel extends SR.Data
         assert @properties.hasOwnProperty(property), "attempting to retrieve '#{property}' which doesn't exist in this model"
 
         prop = @properties[property]
+
         # simple property options enforcement routine
         #
         # unique: true (for array types, ensures only unique entries)
         enforce = (x) ->
-            return x unless prop?.opts?
             #console.log "checking #{property} with #{x}"
+            #
             violations = []
             validator = prop?.opts?.validator
             val = switch
+                when not x
+                    violations.push "'#{property}' is a required property" if prop.opts?.required
+                    null
                 when prop.model? and x instanceof Array and prop.mode is 2
                     results = (@store.findRecord(prop.model,id) for id in prop.value unless id instanceof DataStoreModel).filter (e) -> e?
                     if results.length then results else x
@@ -171,7 +175,7 @@ class DataStoreModel extends SR.Data
             if validator? then validator.call(@, val) else val
 
         # should provide resolved results
-        if typeof prop?.computed is 'function'
+        if typeof prop?.computed is 'function' and @store.isReady
             @log.debug "issuing get on computed property: %s", property
             value = prop.value = enforce.call @, prop.value
             if value and @useCache and prop.cachedOn and (prop.opts?.cache isnt false)
@@ -199,7 +203,8 @@ class DataStoreModel extends SR.Data
             value # this is to avoid returning a function when direct 'get' is invoked
         else
             @log.info "issuing get on static property: %s", property
-            value = prop.value = enforce.call(@, prop?.value)
+            prop.value = enforce.call(@, prop?.value) if @store.isReady
+            value = prop.value
             @log.debug method:'get',property:property,id:@id,"issuing get on #{property} with #{value}"
             callback? null, value
             value
@@ -275,7 +280,7 @@ class DataStoreModel extends SR.Data
     update: (data) ->
         @setProperties data
         # if controller associated, issue the updateRecord action call
-        @controller?.update data
+        @controller?.update data if @store.isReady
 
     # deal with DIRT properties
     dirtyProperties: -> (prop for prop, data of @properties when data.isDirty)
@@ -306,7 +311,7 @@ class DataStoreModel extends SR.Data
 
     destroy: (callback) ->
         # if controller associated, issue the destroy action call
-        @controller?.destroy data
+        @controller?.destroy data if @store.isReady
 
         @store?.commit @, true
         callback null, true
@@ -323,7 +328,7 @@ class DataStoreController extends EventEmitter
         model.controller ?= this
 
         @store = model.store
-        @create opts?.data
+        @create opts?.data if @store.isReady
 
     create: (data) ->
         @model.set 'createdOn', new Date()
@@ -362,31 +367,42 @@ class DataStore
         @entities = {}
         @entities = extend(@entities, opts.entities) if opts?.entities?
 
+        @isReady = false
+
         # if @constructor.name != 'DataStore'
         #   assert Object.keys(@entities).length > 0, "cannot have a data store without declared entities!"
 
-        # for name, entity of @entities
-        #     entity.name = entity.model.prototype.name
-        #     entity.registry = new DataStoreRegistry entity,log:@log,store:@
+    initialize: ->
+        return if @isReady
+        for collection, entity of @entities
+            entity.registry = new DataStoreRegistry entity,log:@log,store:@
+            if entity.static?
+                created = 0
+                for entry in entity.static
+                    do (entry) =>
+                        record = @createRecord(entity.name, entry)
+                        assert record?, "#{entry} failed to be created!"
+                        record?.save()
+                        created++ if record?
+                assert created is entity.static.length, "failed to create all the static records!"
+                @log.info collection:collection, "autoloaded #{entity.static.length} static records"
+        @isReady = true
 
     contains: (collection, entity) ->
         entity.collection = collection
         entity.name = entity.model.prototype.name
         entity.persist ?= true # default is to persist data
-        entity.registry = new DataStoreRegistry entity,log:@log,store:@
+        entity.cache   ?= 1 # default cache for 1 second
         entity.controller ?= DataStoreController
         @entities[entity.name] = entity
 
         @log.info collection:collection, "registered a collection of '#{collection}' into the store"
 
-        if entity.static?
-            for entry in entity.static
-                do (entry) =>
-                    record = @createRecord(entity.name, entry)
-                    record?.save()
-            @log.info collection:collection, "autoloaded #{entity.static.length} static records"
-
-    dump: -> @log.info model:name,records:entity.registry.list() for name,entity of @entities
+    dump: ->
+        for name,entity of @entities
+            records = entity.registry?.list()
+            for record in records
+                @log.info model:name,record:record.serialize(),method:'dump', "DUMP"
 
     createRecord: (type, data) ->
         match = @findRecord type, data?.id

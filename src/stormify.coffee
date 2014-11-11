@@ -62,7 +62,7 @@ poster = (store,type) -> () ->
     record.save (err, props) =>
         return @res.send 500, error: err if err?
         if props?
-            @req.result = record.serialize true
+            @req.result = record.serialize()
             @next()
         else
             @res.send 404
@@ -71,6 +71,8 @@ getter = (store,type) -> () ->
     requestor = @req.user
     condition = @query.ids
     condition ?= @params.id
+
+    store.auditor?.info stormify:"getter",query:condition,"stormify.getter for '#{type}'"
 
     return @res.send 400 unless requestor? and type?
     return @res.send 403 if condition isnt undefined and 'all' not in @req.authInfo?.scope
@@ -94,7 +96,7 @@ putter = (store,type) -> () ->
         return @res.send 500, error: err if err?
         if result?
             @req.result = result
-            log.debug query:@params.id,result:@req.result, 'putter results for %s',type
+            store.auditor?.debug query:@params.id,result:@req.result, 'putter results for %s',type
             @next()
         else
             @res.send 404
@@ -107,7 +109,7 @@ remover = (store,type) -> () ->
         return @res.send 500, error: err if err?
         if result?
             @req.result = result
-            log.debug query:@params.id,result:@req.result, 'remover results for %s',type
+            store.auditor?.debug query:@params.id,result:@req.result, 'remover results for %s',type
             @next()
         else
             @res.send 404
