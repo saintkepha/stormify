@@ -73,6 +73,7 @@ class DataStoreModel extends SR.Data
 
         @id = data?.id
         @id ?= uuid.v4()
+        @version ?= 1
         @setProperties data
 
         # verify basic schema compliance during construction
@@ -121,6 +122,7 @@ class DataStoreModel extends SR.Data
 
         data = {}
         data["#{@name}"] = result
+        data.version = @version
         data
 
     get: (property, callback) ->
