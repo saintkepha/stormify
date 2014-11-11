@@ -452,8 +452,10 @@ class DataStore
 
         @log.debug method:'find',type:type,condition:condition, 'issuing findBy on requested entity'
         [ key, value ] = ([key, value] for key, value of condition)[0]
-        records = @entities[type]?.registry?.list()
-        results = (record for record in records when record.id? and record.get(key) is value) if records?.length > 0
+        records = @entities[type]?.registry?.list() or []
+        results = records.filter (record) ->
+            x = record.get(key)
+            x is value or x.id is value
 
         unless results?.length > 0
             @log.warn method:'findBy',type:type,condition:condition,'unable to find any records for the condition!'
