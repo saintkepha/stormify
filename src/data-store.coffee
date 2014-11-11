@@ -455,7 +455,7 @@ class DataStore
         records = @entities[type]?.registry?.list() or []
         results = records.filter (record) ->
             x = record.get(key)
-            x is value or x.id is value
+            x is value or (x instanceof DataStoreModel and x.id is value)
 
         unless results?.length > 0
             @log.warn method:'findBy',type:type,condition:condition,'unable to find any records for the condition!'
