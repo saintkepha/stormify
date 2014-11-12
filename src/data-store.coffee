@@ -33,6 +33,8 @@ class DataStoreRegistry extends SR
             log: @log
             path: "#{datadir}/#{entity.name}.db" if entity.persist
 
+    keys: -> Object.keys(@entries)
+
     get: (id) ->
         entry = super id
         return null unless entry?
@@ -468,8 +470,8 @@ class DataStore
         _entity = @entities[type]
         return callback "DS: unable to find using unsupported type: #{type}" unless _entity?
         #return callback "DS: unable to find without specified match condition" unless query?
-        return callback null, _entity.registry?.list() unless query?
-
+        #return callback null, _entity.registry?.list() unless query?
+        query ?= _entity.registry?.keys()
         query = [ query ] unless query instanceof Array
 
         self = @
