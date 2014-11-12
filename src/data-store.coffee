@@ -196,7 +196,7 @@ class DataStoreModel extends SR.Data
             if prop.opts?.async
                 prop.computed.apply @, [cacheComputed,prop]
             else
-                prop.value = prop.computed.apply @
+                value = prop.value = prop.computed.apply @
                 callback? null, enforce.call @, prop.value
 
             value # this is to avoid returning a function when direct 'get' is invoked
