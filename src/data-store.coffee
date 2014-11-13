@@ -7,16 +7,23 @@ bunyan = require 'bunyan'
 
 #---------------------------------------------------------------------------------------------------------
 
-SR = require 'stormregistry'
+SR = require './stormregistry'
 
+#-----------------------------------
+# DataStoreRegistry
+#
+# Uses deferred DataStoreModel instantiation to take place only on @get
+#
 class DataStoreRegistry extends SR
 
-    constructor: (@entity,opts) ->
-        assert entity instanceof Object and entity.model?, "cannot construct DataStoreRegistry without valid entity passed in"
-
+    constructor: (@collection,opts) ->
         @store = opts?.store
+        assert @store? and @store.contains(@collection), "cannot construct DataStoreRegistry without valid store containing '#{collection}' passed in"
+
         @log = opts?.log?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
+
+        @entity = @store.contains(@collection)
 
         @on 'load', (key,val) ->
             @log.debug entity:@entity.name,key:key,'loading a persisted record'
@@ -31,7 +38,7 @@ class DataStoreRegistry extends SR
         datadir = opts?.datadir ? '/tmp'
         super
             log: @log
-            path: "#{datadir}/#{entity.name}.db" if entity.persist
+            path: "#{datadir}/#{@collection}.db" if opts?.persist
 
     keys: -> Object.keys(@entries)
 
@@ -39,7 +46,22 @@ class DataStoreRegistry extends SR
         entry = super id
         return null unless entry?
         unless entry instanceof DataStoreModel
-            @update id, new @entity.model(entry, store:@store,log:@log)
+            @log.debug entry:entry, "creating #{@entity.name} using underlying entry"
+
+            # XXX - we cannot call createRecord since it will also create controller
+            # which may have a circular reference back to this entity and cause an infinite loop!
+            #@update id, @store.createRecord @entityName, entry
+
+            record = new @entity.model(entry, store:@store,log:@log)
+            @update id, record
+
+            # we try here since the data from persistence should be good, but relations may be broken
+            try
+                # XXX - this just seems wrong somehow...
+                record.controller = new @entity.controller record, log:@log
+            catch err
+                @log.warn method:"get", error:err, "encountered issue while attaching controller to the new record!"
+
         super id
 
 #---------------------------------------------------------------------------------------------------------
@@ -58,6 +80,7 @@ class DataStoreModel extends SR.Data
             createdOn:  value: null
             modifiedOn: value: null
             accessedOn: value: null
+            error:      value: null
 
         @isSaved = false
 
@@ -67,6 +90,8 @@ class DataStoreModel extends SR.Data
         @log ?= new bunyan name: @constructor.name
 
         @log.debug data:data, "constructing #{@name}"
+
+        @useCache = opts?.useCache
 
         # initialize all properties according to schema
         for key,val of @schema when @schema?
@@ -126,23 +151,35 @@ class DataStoreModel extends SR.Data
         data["#{@name}"] = result
         data
 
-    get: (property, callback) ->
+    get: (property, opts..., callback) ->
         assert @properties.hasOwnProperty(property), "attempting to retrieve '#{property}' which doesn't exist in this model"
 
         prop = @properties[property]
+
+        enforceCheck = if opts.length then opts[0].enforce else true
 
         # simple property options enforcement routine
         #
         # unique: true (for array types, ensures only unique entries)
         enforce = (x) ->
-            #console.log "checking #{property} with #{x}"
-            #
+            return x unless enforceCheck
+
+            @log.debug "checking #{property} with #{x}"
+
+            x ?= prop.opts?.defaultValue
+
             violations = []
             validator = prop?.opts?.validator
             val = switch
-                when not x
+                when not x?
                     violations.push "'#{property}' is a required property" if prop.opts?.required
-                    null
+                    x
+                when prop.model? and typeof prop.model isnt 'string'
+                    unless x instanceof prop.model
+                        violations.push "'#{property}' must be an instance of #{prop.model.prototype?.constructor?.name}"
+                    switch prop.mode
+                        when 1 then x
+                        when 2 then [ x ]
                 when prop.model? and x instanceof Array and prop.mode is 2
                     results = (@store.findRecord(prop.model,id) for id in prop.value unless id instanceof DataStoreModel).filter (e) -> e?
                     if results.length then results else x
@@ -182,7 +219,7 @@ class DataStoreModel extends SR.Data
             if value and @useCache and prop.cachedOn and (prop.opts?.cache isnt false)
                 cachedFor = (new Date() - prop.cachedOn)/1000
                 if cachedFor < @useCache
-                    @log.info method:'get',property:property,id:@id,"returning cached value: #{value} will refresh in #{@useCache - cachedFor} seconds"
+                    @log.debug method:'get',property:property,id:@id,"returning cached value: #{value} will refresh in #{@useCache - cachedFor} seconds"
                     callback? null, value
                     return value
                 else
@@ -203,7 +240,7 @@ class DataStoreModel extends SR.Data
 
             value # this is to avoid returning a function when direct 'get' is invoked
         else
-            @log.info "issuing get on static property: %s", property
+            @log.debug "issuing get on static property: %s", property
             prop.value = enforce.call(@, prop?.value) if @store.isReady
             value = prop.value
             @log.debug method:'get',property:property,id:@id,"issuing get on #{property} with #{value}"
@@ -280,8 +317,9 @@ class DataStoreModel extends SR.Data
 
     update: (data) ->
         @setProperties data
+
         # if controller associated, issue the updateRecord action call
-        @controller?.update data if @store.isReady
+        @controller?.update data
 
     # deal with DIRT properties
     dirtyProperties: -> (prop for prop, data of @properties when data.isDirty)
@@ -312,7 +350,7 @@ class DataStoreModel extends SR.Data
 
     destroy: (callback) ->
         # if controller associated, issue the destroy action call
-        @controller?.destroy data if @store.isReady
+        @controller?.destroy()
 
         @store?.commit @, true
         callback null, true
@@ -326,15 +364,30 @@ class DataStoreController extends EventEmitter
     constructor: (@model,opts) ->
         assert model instanceof DataStoreModel, "unable to create an instance of DS.Controller without underlying model!"
 
-        model.controller ?= this
+        @log = opts?.log?.child class: @constructor.name
+        @log ?= new bunyan name: @constructor.name
 
         @store = model.store
-        @create opts?.data if @store.isReady
+        if @store.isReady
+            try
+                @create opts?.data
+            catch err
+                @model.set 'error', err
+                throw err
+        else
+            @store.once 'ready', =>
+                try
+                    @create opts?.data
+                catch err
+                    @model.set 'error', err
+                    throw err
 
     create: (data) ->
-        @model.set 'createdOn', new Date()
-        @model.set 'modifiedOn', new Date()
-        @model.set 'accessedOn', new Date()
+        createdOn = @model.get 'createdOn'
+        unless createdOn?
+            @model.set 'createdOn', new Date()
+            @model.set 'modifiedOn', new Date()
+            @model.set 'accessedOn', new Date()
 
         @emit 'createRecord', [ @model.name, @model.id ]
 
@@ -349,23 +402,35 @@ class DataStoreController extends EventEmitter
 
 #---------------------------------------------------------------------------------------------------------
 
-class DataStore
+class DataStore extends EventEmitter
 
     async = require 'async'
     uuid  = require 'node-uuid'
     extend = require('util')._extend
 
+    name: null # must be set by sub-class
+
     adapters: {}
-    adapter: (type, module) -> @adapters[type] = module
+    adapter: (type, module) -> @adapters[type] = module if type? and module?
     using: (adapter) -> @adapters[adapter]
 
+    stores: {}
+    link: (store) -> @stores[store.name] = store if store?
+
     constructor: (opts) ->
+        @name ?= opts?.name
+
+        assert @name?, "cannot construct DataStore without naming this store!"
+
         @log = opts?.auditor?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
 
+        # setup any authorizer reference to this store
         @authorizer = opts?.authorizer
+        @authorizer?.link @
 
-        @entities = {}
+        @collections = {} # the name of collection mapping to entity
+        @entities = {}    # the name of entity mapping to entity object
         @entities = extend(@entities, opts.entities) if opts?.entities?
 
         @isReady = false
@@ -375,8 +440,8 @@ class DataStore
 
     initialize: ->
         return if @isReady
-        for collection, entity of @entities
-            entity.registry = new DataStoreRegistry entity,log:@log,store:@
+        for collection, entity of @collections
+            entity.registry = new DataStoreRegistry collection, log:@log,store:@,persist:entity.persist
             if entity.static?
                 created = 0
                 for entry in entity.static
@@ -388,14 +453,17 @@ class DataStore
                 assert created is entity.static.length, "failed to create all the static records!"
                 @log.info collection:collection, "autoloaded #{entity.static.length} static records"
         @isReady = true
+        @emit 'ready'
 
     contains: (collection, entity) ->
+        return @collections[collection] unless entity?
+
         entity.collection = collection
         entity.name = entity.model.prototype.name
         entity.persist ?= true # default is to persist data
         entity.cache   ?= 1 # default cache for 1 second
         entity.controller ?= DataStoreController
-        @entities[entity.name] = entity
+        @collections[collection] = @entities[entity.name] = entity
 
         @log.info collection:collection, "registered a collection of '#{collection}' into the store"
 
@@ -406,21 +474,16 @@ class DataStore
                 @log.info model:name,record:record.serialize(),method:'dump', "DUMP"
 
     createRecord: (type, data) ->
-        match = @findRecord type, data?.id
-        return if match?
-
-        #@log.info method:"createRecord", type: type, data: data
+        @log.debug method:"createRecord", type: type, data: data
         try
             entity = @entities[type]
-            record = new entity.model data,store:this,log:@log
-            record.useCache = entity.cache
+            record = new entity.model data,store:this,log:@log,useCache:entity.cache
             record.controller = new entity.controller record,log:@log
 
-            #record?.controller = @entities[type].controller
             @log.info  method:"createRecord", id: record.id, 'created a new record for %s', record.constructor.name
             #@log.debug method:"createRecord", record:record
         catch err
-            @log.error err, "unable to instantiate a new DS.Model for #{type}"
+            @log.error error:err, "unable to instantiate a new DS.Model for #{type}"
             throw err
         record
 
@@ -463,9 +526,11 @@ class DataStore
             @log.warn method:'findBy',type:type,condition:condition,'unable to find any records for the condition!'
         else
             @log.debug method:'findBy',type:type,condition:condition,'found %d matching results',results.length
-        callback null, results
+        callback? null, results
+        results
 
     # find returns the properties
+    # XXX - enable support for query to be specified as an object with various key/value
     find: (type, query, callback) ->
         _entity = @entities[type]
         return callback "DS: unable to find using unsupported type: #{type}" unless _entity?
@@ -481,10 +546,14 @@ class DataStore
                 tasks[id] = (callback) ->
                     match = self.findRecord type, id
                     if match? and match instanceof DataStoreModel
-                        #match.getProperties (properties) -> callback null, properties
-                        match.getProperties (properties) -> callback null, match
+                        # trigger a fresh computation and validations on the match
+                        try
+                            match.getProperties (properties) -> callback null, match
+                        catch err
+                            self.log.error error:err,type:type,id:id, 'unable to obtain validated properties from the matching record'
+                            callback null, match
                     else
-                        return callback null unless _entity.helpers?.get?
+                        callback null
                         # # attempt to self get the requested info only valid for ID based query condition
                         # _entity.helpers?.get.apply self, [id, (result) ->
                         #     record = self.createRecord type, result if result?

@@ -14,6 +14,11 @@ Array::where = (query) ->
             match += 1 if item[key] is val
         if match is hit then true else false
 
+Array::pushRecord = (record) ->
+    return null if typeof record isnt "object"
+    @push record unless @where(id:record.id).length > 0
+    record
+
 DataStore = require './data-store'
 
 passport = require 'passport'
@@ -57,6 +62,8 @@ poster = (store,type) -> () ->
     store.log?.info stormify:"poster",request:@body,"stormify.poster for '#{type}'"
 
     try
+        #XXX - should open store using requestor
+        #record = store.open(requestor).createRecord type, @body[type]
         record = store.createRecord type, @body[type]
     catch err
         return @res.send 500, error: err
@@ -128,6 +135,7 @@ remover = (store,type) -> () ->
 # EXPORTS
 #
 module.exports =
+    SR: require './stormregistry'
     DS: DataStore
     authorizer: authorizer
     poster: poster
@@ -143,22 +151,22 @@ module.exports.serve = (store,opts) ->
     store.log?.info method:"serve", "STORMIFYING data entities!"
 
     baseUrl = opts?.baseUrl or ''
-    for name, entity of store.entities
-        store.log?.debug method:"serve", "processing #{name}..."
+    for collection, entity of store.collections
+        store.log?.debug method:"serve", "processing #{collection}..."
         continue if entity.hidden
 
         if entity.serve?
             entity.serve.call @, opts
-            store.log?.info method:"serve", "serving custom REST endpoint(s) for: #{name}"
+            store.log?.info method:"serve", "serving custom REST endpoint(s) for: #{collection}"
             continue if entity.serveOverride
 
-        collection = entity.collection
+        name = entity.name
         @post "#{baseUrl}/#{collection}",     authorizer(store), poster(store,name), -> @send @req.result
         @get  "#{baseUrl}/#{collection}",     authorizer(store), getter(store,name), -> @send @req.result
         @get  "#{baseUrl}/#{collection}/:id", authorizer(store), getter(store,name), -> @send @req.result
         @put  "#{baseUrl}/#{collection}/:id", authorizer(store), putter(store,name), -> @send @req.result
         @del  "#{baseUrl}/#{collection}/:id", authorizer(store),remover(store,name), -> @send 204
 
-        store.log?.info method:"serve", "auto-generated REST endpoints at: #{baseUrl}/#{name}"
+        store.log?.info method:"serve", "auto-generated REST endpoints at: #{baseUrl}/#{collection}"
 
     # open up a socket.io connection stream for store updates
