@@ -33,7 +33,8 @@ class DataStoreRegistry extends SR
                 entry.saved = true
                 @add key, entry
         @on 'ready', ->
-            @log.info entity:@entity.name,size:Object.keys(@entries)?.length,'registry is initialized and ready'
+            size = Object.keys(@entries)?.length
+            @log.info entity:@entity.name,size:size,"registry for '#{@collection}' initialized with #{size} records"
 
         datadir = opts?.datadir ? '/tmp'
         super
@@ -46,21 +47,28 @@ class DataStoreRegistry extends SR
         entry = super id
         return null unless entry?
         unless entry instanceof DataStoreModel
-            @log.debug entry:entry, "creating #{@entity.name} using underlying entry"
+            @log.info id:id, "restoring #{@entity.name} from registry using underlying entry"
 
             # XXX - we cannot call createRecord since it will also create controller
             # which may have a circular reference back to this entity and cause an infinite loop!
-            #@update id, @store.createRecord @entityName, entry
 
-            record = new @entity.model(entry, store:@store,log:@log)
+            record = @store.createRecord @entity.name, entry
+            record.isSaved = true
             @update id, record
 
+            # record = new @entity.model(entry, store:@store,log:@log)
+            # record.isSaved = true # this is restoring a previously saved record!
+            # @update id, record
+
             # we try here since the data from persistence should be good, but relations may be broken
-            try
-                # XXX - this just seems wrong somehow...
-                record.controller = new @entity.controller record, log:@log
-            catch err
-                @log.warn method:"get", error:err, "encountered issue while attaching controller to the new record!"
+            #
+            # XXX - do NOT attach controller during get from registry!
+            # try
+            #     # XXX - this just seems wrong somehow...
+            #     record.controller = new @entity.controller record, data:entry,log:@log
+            # catch err
+            #     @log.warn method:"get", error:err, "encountered issue while attaching controller to the new record!"
+            #     throw err
 
         super id
 
@@ -101,6 +109,9 @@ class DataStoreModel extends SR.Data
         @id = data?.id
         @id ?= uuid.v4()
         @version ?= 1
+
+        @data = data #  XXX - hackish...
+
         @setProperties data
 
         # verify basic schema compliance during construction
@@ -187,17 +198,7 @@ class DataStoreModel extends SR.Data
                     switch prop.mode
                         when 1 then x
                         when 2 then [ x ]
-                when prop.model? and x instanceof Object
-                    try
-                        inverse = prop.opts?.inverse
-                        x[inverse] = @ if inverse?
-                        record = @store.createRecord prop.model,x
-                    catch err
-                        @log.warn error:err, "attempt to auto-create #{prop.model} failed"
-                        record = x
-                    #XXX - why does record.save() hang?
-                    #record.save()
-                    record
+                when prop.model? and x instanceof Object then x
                 when prop.model? and prop.mode isnt 3
                     #console.log "#{prop.model} using #{x}"
                     record = @store.findRecord(prop.model,x)
@@ -331,29 +332,59 @@ class DataStoreModel extends SR.Data
         dirty = dirty.join ' '
         properties.some (prop) -> ~dirty.indexOf prop
 
+    # specifying 'callback' has special significance
+    #
+    # when 'callback' is passed in, it indicates that the caller is the original CREATOR
+    # of this record and would handle the case where this record is NOT yet saved
+    #
+    # this means that when it is called without callback and the record is NOT yet saved
+    # no operation will take place!
+    #
     save: (callback) ->
-        state = switch
-            when not @isSaved then 'new'
-            when @isDirty() then 'changed'
-            else 'unchanged'
-        @log.info method:'save',id:@id, "saving a %s record", state
-        if @isDirty() or not @isSaved
-            @getProperties (props) =>
-                unless props?
-                    @log.error method:'save',id:@id,'failed to retrieve properties following save!'
-                    callback? 'save failed to retrieve updated properties!', null
-                else
-                    @store?.commit @
-                    @clearDirty()
-                    @isSaved = true
-                    callback? null, @
+
+
+        switch
+            # when called with callback ALWAYS perform commit action
+            when callback?
+                try
+                    @controller?.beforeSave?()
+                catch err
+                    @log.error method:'save',record:@name,id:@id,error:err,'failed to satisfy beforeSave controller calls'
+                    callback err, null
+                    throw err
+
+                @getProperties (props) =>
+                    unless props?
+                        @log.error method:'save',id:@id,'failed to retrieve properties following save!'
+                        return callback 'save failed to retrieve updated properties!', null
+
+                    @log.info method:'save',record:@name,id:@id, "saving a 'new' record"
+                    try
+                        @store?.commit @
+                        @clearDirty()
+                        @isSaved = true
+                        @controller?.afterSave?()
+                        callback null, @, props
+                    catch err
+                        @log.error method:'save',record:@name,id:@id,error:err,'failed to commit record to the store!'
+                        callback err, null
+                        throw err
+
+            # when this record hasn't been saved yet, DO NOT commit to the store!
+            when not @isSaved then return
+
+            # otherwise, we try to commit
+            else
+                @store?.commit @
+                @clearDirty()
 
     destroy: (callback) ->
+        @isDestroy = true
+
         # if controller associated, issue the destroy action call
         @controller?.destroy()
-
-        @store?.commit @, true
-        callback null, true
+        @store?.commit @
+        callback? null, true
 
 #---------------------------------------------------------------------------------------------------------
 
@@ -368,37 +399,53 @@ class DataStoreController extends EventEmitter
         @log ?= new bunyan name: @constructor.name
 
         @store = model.store
-        if @store.isReady
-            try
-                @create opts?.data
-            catch err
-                @model.set 'error', err
-                throw err
-        else
-            @store.once 'ready', =>
-                try
-                    @create opts?.data
-                catch err
-                    @model.set 'error', err
-                    throw err
 
-    create: (data) ->
+        # if @store.isReady
+        #     try
+        #         @create opts?.data
+        #     catch err
+        #         @model.set 'error', err
+        #         throw err
+        # else
+        #     @store.once 'ready', =>
+        #         try
+        #             @create opts?.data
+        #         catch err
+        #             @model.set 'error', err
+        #             @log.warn error:err,id:@model.id, 'unable to invoke controller.create for this model: %s', @model.name
+
+    beforeSave: ->
+        @log.trace method:'beforeSave', 'we should auto resolve belongsTo and hasMany here...'
         createdOn = @model.get 'createdOn'
         unless createdOn?
             @model.set 'createdOn', new Date()
             @model.set 'modifiedOn', new Date()
             @model.set 'accessedOn', new Date()
 
-        @emit 'createRecord', [ @model.name, @model.id ]
+        # when prop.model? and x instanceof Object
+        #     try
+        #         inverse = prop.opts?.inverse
+        #         x[inverse] = @ if inverse?
+        #         record = @store.createRecord prop.model,x
+        #         record.save()
+        #     catch err
+        #         @log.warn error:err, "attempt to auto-create #{prop.model} failed"
+        #         record = x
+        #     #XXX - why does record.save() hang?
+        #     record
+
+    afterSave: ->
+
+        @emit 'save', [ @model.name, @model.id ]
 
     update: (data) ->
         @model.set 'modifiedOn', new Date()
 
-        @emit 'updateRecord', [ @model,name, @model.id ]
+        @emit 'update', [ @model.name, @model.id ]
 
     destroy: (data) ->
 
-        @emit 'destroyRecord', [ @model.name, @model.id ]
+        @emit 'destroy', [ @model.name, @model.id ]
 
 #---------------------------------------------------------------------------------------------------------
 
@@ -440,18 +487,22 @@ class DataStore extends EventEmitter
 
     initialize: ->
         return if @isReady
+
+        console.log "initializing a new DataStore: #{@name}"
+        @log.info method:'initialize', 'initializing a new DataStore: %s', @name
         for collection, entity of @collections
-            entity.registry = new DataStoreRegistry collection, log:@log,store:@,persist:entity.persist
-            if entity.static?
-                created = 0
-                for entry in entity.static
-                    do (entry) =>
-                        record = @createRecord(entity.name, entry)
-                        assert record?, "#{entry} failed to be created!"
-                        record?.save()
-                        created++ if record?
-                assert created is entity.static.length, "failed to create all the static records!"
-                @log.info collection:collection, "autoloaded #{entity.static.length} static records"
+            do (collection,entity) =>
+                entity.registry = new DataStoreRegistry collection, log:@log,store:@,persist:entity.persist
+                if entity.static?
+                    entity.registry.once 'ready', =>
+                        @log.info collection:collection, 'loading static records for %s', collection
+                        for entry in entity.static
+                            entry.saved = true
+                            entity.registry.add entry.id, entry
+                        @log.info collection:collection, "autoloaded #{entity.static.length} static records"
+
+        @log.info method:'initialize', 'initialization complete for: %s', @name
+        console.log "initialization complete for: #{@name}"
         @isReady = true
         @emit 'ready'
 
@@ -478,7 +529,7 @@ class DataStore extends EventEmitter
         try
             entity = @entities[type]
             record = new entity.model data,store:this,log:@log,useCache:entity.cache
-            record.controller = new entity.controller record,log:@log
+            record.controller = new entity.controller record,data:data,log:@log
 
             @log.info  method:"createRecord", id: record.id, 'created a new record for %s', record.constructor.name
             #@log.debug method:"createRecord", record:record
@@ -493,17 +544,10 @@ class DataStore extends EventEmitter
         match.destroy callback
 
     updateRecord: (type, id, data, callback) ->
-        @find type, id, (err, matches) =>
-            if matches? and matches.length is 1
-                record = @findRecord type, matches[0].id
-                record.update data
-                if record
-                  record.save callback
-                else
-                   callback null
-            else
-                @log.warn method:'updateRecord',type:type,id:id,'unable to find existing record to update!'
-                callback null
+        record = @findRecord type, id
+        callback null unless record?
+        record.update data
+        record.save callback
 
     findRecord: (type, id) ->
         return unless type? and id?
@@ -515,12 +559,17 @@ class DataStore extends EventEmitter
     findBy: (type, condition, callback) ->
         return callback "invalid findBy query params!" unless type? and typeof condition is 'object'
 
-        @log.debug method:'find',type:type,condition:condition, 'issuing findBy on requested entity'
+        @log.debug method:'findBy',type:type,condition:condition, 'issuing findBy on requested entity'
         [ key, value ] = ([key, value] for key, value of condition)[0]
+
         records = @entities[type]?.registry?.list() or []
-        results = records.filter (record) ->
-            x = record.get(key)
-            x is value or (x instanceof DataStoreModel and x.id is value)
+        results = records.filter (record) =>
+            try
+                x = record.get(key)
+                x is value or (x instanceof DataStoreModel and x.id is value)
+            catch err
+                @log.warn method:'findBy',type:type,id:record.id,error:err,'skipping bad record...'
+                false
 
         unless results?.length > 0
             @log.warn method:'findBy',type:type,condition:condition,'unable to find any records for the condition!'
@@ -550,8 +599,8 @@ class DataStore extends EventEmitter
                         try
                             match.getProperties (properties) -> callback null, match
                         catch err
-                            self.log.error error:err,type:type,id:id, 'unable to obtain validated properties from the matching record'
-                            callback null, match
+                            self.log.warn error:err,type:type,id:id, 'unable to obtain validated properties from the matching record'
+                            callback null
                     else
                         callback null
                         # # attempt to self get the requested info only valid for ID based query condition
@@ -583,35 +632,29 @@ class DataStore extends EventEmitter
 
             callback null, matches
 
-    commit: (obj, isDestroy) ->
-        return unless obj instanceof DataStoreModel
+    commit: (record) ->
+        return unless record instanceof DataStoreModel
 
-        @log.debug method:"commit", record: obj
+        @log.debug method:"commit", record: record
 
-        registry = (entity.registry for type, entity of @entities when entity.model?.prototype.constructor.name is obj.constructor.name)[0]
-        return unless registry
+        registry = (entity.registry for type, entity of @entities when entity.model?.prototype.constructor.name is record.constructor.name)[0]
+        assert registry?, "cannot commit '#{record.name}' into store which doesn't contain the collection"
 
-        isDestroy ?= false
+        switch
+            when record.isDestroy then registry.remove record.id
+            when not record.isSaved
+                exists = record.id? and registry.get(record.id)?
+                assert not exists, "cannot commit a new record '#{record.name}' into the store using pre-existing ID: #{record.id}"
 
-        # controller = obj.controller
-        # obj.controller = null
+                # if there is no ID specified for this entity, we auto-assign one at the time we commit
+                record.id ?= uuid.v4()
+                registry.add record.id, record
+            when record.isDirty()
+                record.changed = true
+                registry.update record.id, record
+                delete record.changed
 
-        # if there is no ID specified for this entity, we auto-assign one at the time we commit
-        obj.id ?= uuid.v4()
-        match = registry.get obj.id
-        unless match?
-            registry.add(obj.id, obj) if not isDestroy
-        else
-            unless isDestroy
-                obj.changed = true
-                registry.update obj.id, obj
-                delete obj.changed
-            else
-                registry.remove obj.id
-
-        # obj.controller = controller
-        @log.info method:"commit", id:obj.id, "updated the store registry for %s", obj.constructor.name
-        obj
+        @log.info method:"commit", id:record.id, "updated the store registry for %s", record.constructor.name
 
 module.exports = DataStore
 module.exports.Model = DataStoreModel

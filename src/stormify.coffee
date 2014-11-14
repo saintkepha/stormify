@@ -17,7 +17,6 @@ Array::where = (query) ->
 Array::pushRecord = (record) ->
     return null if typeof record isnt "object"
     @push record unless @where(id:record.id).length > 0
-    record
 
 DataStore = require './data-store'
 
@@ -31,12 +30,16 @@ authorizer = (store) ->
     if store.authorizer? and store.authorizer instanceof DataStore
         passport.use new BearerStrategy (token,done) ->
             token = store.authorizer.findRecord 'token', token
-            identity = token.get('identity') if token instanceof DataStore.Model
+            # should verify that it is AuthorizationToken once we bundle that in stormify
+            if token? and token instanceof DataStore.Model
+                identity = token.get('identity')
+                session = token.get('session')
+                if identity? and session?
+                    return done null, session, { scope: identity.get('scope') }
 
-            unless identity? and identity instanceof DataStore.Model
-                done null, false
-            else
-                done null, identity, { scope: identity.get('scope') }
+            # default case is unauthorized...
+            done null, false
+
         passport.authenticate('bearer', {session:false})
     else
         passport.authenticate('anonymous', {session:false})

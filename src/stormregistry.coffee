@@ -49,7 +49,7 @@ class StormRegistry extends EventEmitter
             @db._writeStream.on 'error', (err) =>
                 @log.error err, 'failed to open file for writing'
         else
-            @emit 'ready'
+            process.nextTick => @emit 'ready'
 
     add: (key, entry) ->
         return unless entry?
@@ -95,8 +95,8 @@ class StormRegistry extends EventEmitter
             data = switch
                 when entry instanceof StormRegistryData then entry.serialize()
                 else entry
-            @log.info method:'update',key:key, "saved entry into persistent db"
             @db.set key, data
+            @log.debug method:'update',key:key,data:data, "saved an entry into persistent db"
             entry.saved = true
         @entries[key] = entry
         @emit 'updated', entry
