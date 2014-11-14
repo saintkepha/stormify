@@ -88,7 +88,7 @@ getter = (store,type) -> () ->
     store.log?.info stormify:"getter",query:condition,"stormify.getter for '#{type}'"
 
     return @res.send 400 unless requestor? and type?
-    return @res.send 403 if condition isnt undefined and 'all' not in @req.authInfo?.scope
+    return @res.send 403 unless condition? or 'all' in @req.authInfo?.scope
 
     store.find type, condition, (err, matches) =>
         return @res.send 500, error: err if err?
