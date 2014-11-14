@@ -416,6 +416,8 @@ class DataStoreController extends EventEmitter
 
     beforeSave: ->
         @log.trace method:'beforeSave', 'we should auto resolve belongsTo and hasMany here...'
+
+
         createdOn = @model.get 'createdOn'
         unless createdOn?
             @model.set 'createdOn', new Date()
