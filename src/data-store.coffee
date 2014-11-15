@@ -317,10 +317,10 @@ class DataStoreModel extends SR.Data
     setProperties: (obj) -> @set property, value for property, value of obj
 
     update: (data) ->
-        @setProperties data
-
         # if controller associated, issue the updateRecord action call
-        @controller?.update data
+        @controller?.beforeUpdate? data
+        @setProperties data
+        @controller?.afterUpdate? data
 
     # deal with DIRT properties
     dirtyProperties: -> (prop for prop, data of @properties when data.isDirty)
@@ -341,8 +341,6 @@ class DataStoreModel extends SR.Data
     # no operation will take place!
     #
     save: (callback) ->
-
-
         switch
             # when called with callback ALWAYS perform commit action
             when callback?
@@ -379,11 +377,11 @@ class DataStoreModel extends SR.Data
                 @clearDirty()
 
     destroy: (callback) ->
-        @isDestroy = true
-
         # if controller associated, issue the destroy action call
-        @controller?.destroy()
+        @controller?.beforeDestroy?()
+        @isDestroy = true
         @store?.commit @
+        @controller?.afterDestroy?()
         callback? null, true
 
 #---------------------------------------------------------------------------------------------------------
@@ -394,30 +392,22 @@ class DataStoreController extends EventEmitter
 
     constructor: (@model,opts) ->
         assert model instanceof DataStoreModel, "unable to create an instance of DS.Controller without underlying model!"
+        @store = model.store
 
         @log = opts?.log?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
 
-        @store = model.store
+    beforeUpdate: (data) ->
+        @emit 'beforeUpdate', [ @model.name, @model.id ]
 
-        # if @store.isReady
-        #     try
-        #         @create opts?.data
-        #     catch err
-        #         @model.set 'error', err
-        #         throw err
-        # else
-        #     @store.once 'ready', =>
-        #         try
-        #             @create opts?.data
-        #         catch err
-        #             @model.set 'error', err
-        #             @log.warn error:err,id:@model.id, 'unable to invoke controller.create for this model: %s', @model.name
+    afterUpdate: (data) ->
+        @emit 'afterUpdate', [ @model.name, @model.id ]
+        @model.set 'modifiedOn', new Date()
 
     beforeSave: ->
+        @emit 'beforeSave', [ @model.name, @model.id ]
+
         @log.trace method:'beforeSave', 'we should auto resolve belongsTo and hasMany here...'
-
-
         createdOn = @model.get 'createdOn'
         unless createdOn?
             @model.set 'createdOn', new Date()
@@ -437,17 +427,13 @@ class DataStoreController extends EventEmitter
         #     record
 
     afterSave: ->
+        @emit 'afterSave', [ @model.name, @model.id ]
 
-        @emit 'save', [ @model.name, @model.id ]
+    beforeDestroy: ->
+        @emit 'beforeDestroy', [ @model.name, @model.id ]
 
-    update: (data) ->
-        @model.set 'modifiedOn', new Date()
-
-        @emit 'update', [ @model.name, @model.id ]
-
-    destroy: (data) ->
-
-        @emit 'destroy', [ @model.name, @model.id ]
+    afterDestroy: ->
+        @emit 'afterDestroy', [ @model.name, @model.id ]
 
 #---------------------------------------------------------------------------------------------------------
 
@@ -506,7 +492,8 @@ class DataStore extends EventEmitter
         @log.info method:'initialize', 'initialization complete for: %s', @name
         console.log "initialization complete for: #{@name}"
         @isReady = true
-        @emit 'ready'
+        # this is not guaranteed to fire when all the registries have been initialized
+        process.nextTick => @emit 'ready'
 
     contains: (collection, entity) ->
         return @collections[collection] unless entity?
@@ -520,11 +507,19 @@ class DataStore extends EventEmitter
 
         @log.info collection:collection, "registered a collection of '#{collection}' into the store"
 
-    dump: ->
-        for name,entity of @entities
-            records = entity.registry?.list()
-            for record in records
-                @log.info model:name,record:record.serialize(),method:'dump', "DUMP"
+    #-------------------------------
+    # main usage functions
+
+    # opens the store according to the provided requestor access constraints
+    # this should be subclassed, otherwise, returns itself
+    open: (requestor) -> @
+
+    # register callback for being called on specific event against a collection
+    #
+    notifyOn: (collection, event, callback) ->
+        entity = @contains collection
+        assert entity? and entity.registry? and event in ['added','updated','removed'] and callback?, "must specify valid collection with event and callback to be notified"
+        entity.registry.once 'ready', -> @on event, callback
 
     createRecord: (type, data) ->
         @log.debug method:"createRecord", type: type, data: data
@@ -596,29 +591,15 @@ class DataStore extends EventEmitter
             do (id) ->
                 tasks[id] = (callback) ->
                     match = self.findRecord type, id
-                    if match? and match instanceof DataStoreModel
-                        # trigger a fresh computation and validations on the match
-                        try
-                            match.getProperties (properties) -> callback null, match
-                        catch err
-                            self.log.warn error:err,type:type,id:id, 'unable to obtain validated properties from the matching record'
-                            callback null
-                    else
+                    return callback null unless match? and match instanceof DataStoreModel
+
+                    # trigger a fresh computation and validations on the match
+                    try
+                        match.getProperties (properties) -> callback null, match
+                    catch err
+                        self.log.warn error:err,type:type,id:id, 'unable to obtain validated properties from the matching record'
+                        # below silently ignores this record
                         callback null
-                        # # attempt to self get the requested info only valid for ID based query condition
-                        # _entity.helpers?.get.apply self, [id, (result) ->
-                        #     record = self.createRecord type, result if result?
-                        #     if record?
-                        #         # if we get a new record, we save it to our internal registry
-                        #         record.save callback
-                        #     else
-                        #         match = self.findRecord type, id
-                        #         if match?
-                        #             match.getProperties (props) -> callback null, props
-                        #         else
-                        #             self.log.warn method:'find',id:id, "unable to find or fetch #{type} record!"
-                        #             callback null
-                        # ]
 
         @log.info method:'find',type:type,query:query, 'issuing find on requested entity'
         async.parallel tasks, (err, results) =>
@@ -639,11 +620,13 @@ class DataStore extends EventEmitter
 
         @log.debug method:"commit", record: record
 
-        registry = (entity.registry for type, entity of @entities when entity.model?.prototype.constructor.name is record.constructor.name)[0]
+        registry = @entities[record.name]?.registry
         assert registry?, "cannot commit '#{record.name}' into store which doesn't contain the collection"
 
-        switch
-            when record.isDestroy then registry.remove record.id
+        action = switch
+            when record.isDestroy
+                registry.remove record.id
+                'removed'
             when not record.isSaved
                 exists = record.id? and registry.get(record.id)?
                 assert not exists, "cannot commit a new record '#{record.name}' into the store using pre-existing ID: #{record.id}"
@@ -651,12 +634,25 @@ class DataStore extends EventEmitter
                 # if there is no ID specified for this entity, we auto-assign one at the time we commit
                 record.id ?= uuid.v4()
                 registry.add record.id, record
+                'added'
             when record.isDirty()
                 record.changed = true
                 registry.update record.id, record
                 delete record.changed
+                'updated'
 
-        @log.info method:"commit", id:record.id, "updated the store registry for %s", record.constructor.name
+        # may be high traffic events, should listen only sparingly
+        @emit 'commit', [ action, record.name, record.id ]
+        @log.info method:"commit", id:record.id, "#{action} '%s' on the store registry", record.constructor.name
+
+    #------------------------------------
+    # useful for some debugging cases...
+    dump: ->
+        for name,entity of @entities
+            records = entity.registry?.list()
+            for record in records
+                @log.info model:name,record:record.serialize(),method:'dump', "DUMP"
+
 
 module.exports = DataStore
 module.exports.Model = DataStoreModel

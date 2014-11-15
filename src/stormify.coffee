@@ -54,20 +54,16 @@ serializer = (data) ->
             data
 
 poster = (store,type) -> () ->
+    assert store instanceof DataStore and type? and store.entities.hasOwnProperty(type), "invalid stormify.poster initialization"
     try
-        assert store instanceof DataStore and type? and store.entities[type]? and @body[type]?, "invalid POST request!"
+        assert @body? and @body.hasOwnProperty(type), "attempting to POST without proper '#{type}' as root element!"
     catch err
         return @res.send 500, error:err
 
-    requestor = @req.user
-    return @next() unless requestor?
-
     store.log?.info stormify:"poster",request:@body,"stormify.poster for '#{type}'"
-
     try
-        #XXX - should open store using requestor
-        #record = store.open(requestor).createRecord type, @body[type]
-        record = store.createRecord type, @body[type]
+        requestor = @req.user
+        record = store.open(requestor).createRecord type, @body[type]
     catch err
         return @res.send 500, error: err
 
@@ -81,17 +77,20 @@ poster = (store,type) -> () ->
             @res.send 404
 
 getter = (store,type) -> () ->
-    requestor = @req.user
+    assert store instanceof DataStore and type? and store.entities.hasOwnProperty(type), "invalid stormify.getter initialization"
+
     condition = @query.ids
     condition ?= @params.id
+    return @res.send 403 unless condition? or 'all' in @req.authInfo?.scope
 
     store.log?.info stormify:"getter",query:condition,"stormify.getter for '#{type}'"
 
-    return @res.send 400 unless requestor? and type?
-    return @res.send 403 unless condition? or 'all' in @req.authInfo?.scope
+    # allow condition to be an object
 
-    store.find type, condition, (err, matches) =>
+    requestor = @req.user
+    store.open(requestor).find type, condition, (err, matches) =>
         return @res.send 500, error: err if err?
+
         if matches? and matches.length > 0
             o = {}
             o[type] = serializer(matches)
@@ -102,18 +101,18 @@ getter = (store,type) -> () ->
             @res.send 404
 
 putter = (store,type) -> () ->
+    assert store instanceof DataStore and type? and store.entities.hasOwnProperty(type), "invalid stormify.poster initialization"
     try
-        assert store instanceof DataStore and type? and store.entities[type]? and @body[type]?, "invalid PUT request!"
+        assert @body? and @body.hasOwnProperty(type), "attempting to PUT without proper '#{type}' as root element!"
     catch err
         return @res.send 500, error:err
 
-    requestor = @req.user
-    return @next() unless requestor?
-
     store.log?.info stormify:"putter",request:@body,"stormify.putter for '#{type}'"
 
-    store.updateRecord type, @params.id, @body[type], (err,result) =>
+    requestor = @req.user
+    store.open(requestor).updateRecord type, @params.id, @body[type], (err,result) =>
         return @res.send 500, error: err if err?
+
         if result? and result instanceof DataStore.Model
             @req.result = result.serialize()
             store.log?.info query:@params.id,result:@req.result, 'putter results for %s',type
@@ -122,10 +121,10 @@ putter = (store,type) -> () ->
             @res.send 404
 
 remover = (store,type) -> () ->
-    requestor = @req.user
-    return @next() unless requestor? and type?
+    assert store instanceof DataStore and type? and store.entities.hasOwnProperty(type), "invalid stormify.remover initialization"
 
-    store.deleteRecord type, @params.id, (err,result) =>
+    requestor = @req.user
+    store.open(requestor).deleteRecord type, @params.id, (err,result) =>
         return @res.send 500, error: err if err?
         if result?
             @req.result = result
@@ -164,11 +163,13 @@ module.exports.serve = (store,opts) ->
             continue if entity.serveOverride
 
         name = entity.name
-        @post "#{baseUrl}/#{collection}",     authorizer(store), poster(store,name), -> @send @req.result
         @get  "#{baseUrl}/#{collection}",     authorizer(store), getter(store,name), -> @send @req.result
         @get  "#{baseUrl}/#{collection}/:id", authorizer(store), getter(store,name), -> @send @req.result
-        @put  "#{baseUrl}/#{collection}/:id", authorizer(store), putter(store,name), -> @send @req.result
-        @del  "#{baseUrl}/#{collection}/:id", authorizer(store),remover(store,name), -> @send 204
+
+        unless entity.isReadOnly
+            @post "#{baseUrl}/#{collection}",     authorizer(store), poster(store,name), -> @send @req.result
+            @put  "#{baseUrl}/#{collection}/:id", authorizer(store), putter(store,name), -> @send @req.result
+            @del  "#{baseUrl}/#{collection}/:id", authorizer(store),remover(store,name), -> @send 204
 
         store.log?.info method:"serve", "auto-generated REST endpoints at: #{baseUrl}/#{collection}"
 
