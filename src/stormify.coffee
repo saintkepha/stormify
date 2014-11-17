@@ -20,6 +20,16 @@ Array::pushRecord = (record) ->
 
 DataStore = require './data-store'
 
+createStore = (opts) ->
+    assert opts.store?.prototype?.constructor?.name, "store must be a class definition for the DataStore"
+
+    store = new opts.store
+        auditor: opts.auditor
+        authorizer: opts.authorizer
+
+    assert store instanceof DataStore, "unable to instantiate store as DataStore instance"
+    store
+
 passport = require 'passport'
 BearerStrategy = require 'passport-http-bearer'
 AnonymousStrategy = require 'passport-anonymous'
@@ -81,7 +91,6 @@ getter = (store,type) -> () ->
 
     condition = @query.ids
     condition ?= @params.id
-    return @res.send 403 unless condition? or 'all' in @req.authInfo?.scope
 
     store.log?.info stormify:"getter",query:condition,"stormify.getter for '#{type}'"
 
@@ -137,6 +146,7 @@ remover = (store,type) -> () ->
 # EXPORTS
 #
 module.exports =
+    createStore: createStore
     SR: require './stormregistry'
     DS: DataStore
     authorizer: authorizer

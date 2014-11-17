@@ -110,8 +110,6 @@ class DataStoreModel extends SR.Data
         @id ?= uuid.v4()
         @version ?= 1
 
-        @data = data #  XXX - hackish...
-
         @setProperties data
 
         # verify basic schema compliance during construction
@@ -449,8 +447,8 @@ class DataStore extends EventEmitter
     adapter: (type, module) -> @adapters[type] = module if type? and module?
     using: (adapter) -> @adapters[adapter]
 
-    stores: {}
-    link: (store) -> @stores[store.name] = store if store?
+    # stores: {}
+    # link: (store) -> @stores[store.name] = store if store?
 
     constructor: (opts) ->
         @name ?= opts?.name
@@ -460,13 +458,11 @@ class DataStore extends EventEmitter
         @log = opts?.auditor?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
 
-        # setup any authorizer reference to this store
-        @authorizer = opts?.authorizer
-        @authorizer?.link @
-
         @collections = {} # the name of collection mapping to entity
         @entities = {}    # the name of entity mapping to entity object
         @entities = extend(@entities, opts.entities) if opts?.entities?
+
+        @authorizer = opts?.authorizer
 
         @isReady = false
 
@@ -480,7 +476,7 @@ class DataStore extends EventEmitter
         @log.info method:'initialize', 'initializing a new DataStore: %s', @name
         for collection, entity of @collections
             do (collection,entity) =>
-                entity.registry = new DataStoreRegistry collection, log:@log,store:@,persist:entity.persist
+                entity.registry ?= new DataStoreRegistry collection, log:@log,store:@,persist:entity.persist
                 if entity.static?
                     entity.registry.once 'ready', =>
                         @log.info collection:collection, 'loading static records for %s', collection
@@ -489,23 +485,40 @@ class DataStore extends EventEmitter
                             entity.registry.add entry.id, entry
                         @log.info collection:collection, "autoloaded #{entity.static.length} static records"
 
+        # setup any authorizer reference to this store
+        if @authorizer instanceof DataStore
+            @references @authorizer.contains 'identities'
+            @authorizer.references @contains 'sessions'
+
         @log.info method:'initialize', 'initialization complete for: %s', @name
         console.log "initialization complete for: #{@name}"
         @isReady = true
         # this is not guaranteed to fire when all the registries have been initialized
         process.nextTick => @emit 'ready'
 
+    # used to denote 'collection' that is stored inside this data store
     contains: (collection, entity) ->
         return @collections[collection] unless entity?
 
-        entity.collection = collection
         entity.name = entity.model.prototype.name
+        entity.container = @
         entity.persist ?= true # default is to persist data
         entity.cache   ?= 1 # default cache for 1 second
         entity.controller ?= DataStoreController
-        @collections[collection] = @entities[entity.name] = entity
 
+        @collections[collection] = @entities[entity.name] = entity
         @log.info collection:collection, "registered a collection of '#{collection}' into the store"
+
+    # used to denote entity that is stored outside this data store
+    references: (entity) ->
+        assert entity.name? and entity.container instanceof DataStore, "cannot reference an entity that isn't contained by another store!"
+
+        entity = extend {}, entity # get a copy of it
+        entity.external = true # denote that this entity is an external reference!
+        entity.persist = false
+        entity.cache   = false
+        @entities[entity.name] = entity
+        @log.info reference:entity.name, "registered a reference to '#{entity.name}' into the store"
 
     #-------------------------------
     # main usage functions
@@ -516,7 +529,7 @@ class DataStore extends EventEmitter
 
     # register callback for being called on specific event against a collection
     #
-    notifyOn: (collection, event, callback) ->
+    when: (collection, event, callback) ->
         entity = @contains collection
         assert entity? and entity.registry? and event in ['added','updated','removed'] and callback?, "must specify valid collection with event and callback to be notified"
         entity.registry.once 'ready', -> @on event, callback
@@ -525,7 +538,7 @@ class DataStore extends EventEmitter
         @log.debug method:"createRecord", type: type, data: data
         try
             entity = @entities[type]
-            record = new entity.model data,store:this,log:@log,useCache:entity.cache
+            record = new entity.model data,store:entity.container,log:@log,useCache:entity.cache
             record.controller = new entity.controller record,data:data,log:@log
 
             @log.info  method:"createRecord", id: record.id, 'created a new record for %s', record.constructor.name
