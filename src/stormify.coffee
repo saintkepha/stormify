@@ -59,7 +59,7 @@ serializer = (data) ->
         when data instanceof Array
             (serializer(entry) for entry in data)
         when data instanceof DataStore.Model
-            data.serialize true
+            data.serialize notag:true
         else
             data
 

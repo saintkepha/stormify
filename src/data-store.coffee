@@ -144,7 +144,7 @@ class DataStoreModel extends SR.Data
     # customize how data gets saved into DataStoreRegistry
     # this operation cannot be async, it means it will extract only known current values.
     # but it doesn't matter since computed data will be re-computed once instantiated
-    serialize: (notag) ->
+    serialize: (opts) ->
         result = id: @id
         for prop,data of @properties when data.value?
             x = data.value
@@ -154,7 +154,7 @@ class DataStoreModel extends SR.Data
                     (if y instanceof DataStoreModel then y.id else y) for y in x
                 else x
 
-        return result if notag
+        return result if opts?.notag
 
         data = {}
         data["#{@name}"] = result
@@ -532,7 +532,7 @@ class DataStore extends EventEmitter
     when: (collection, event, callback) ->
         entity = @contains collection
         assert entity? and entity.registry? and event in ['added','updated','removed'] and callback?, "must specify valid collection with event and callback to be notified"
-        entity.registry.once 'ready', -> @on event, callback
+        entity.registry.once 'ready', -> @on event, (entry) -> process.nextTick -> callback entry
 
     createRecord: (type, data) ->
         @log.debug method:"createRecord", type: type, data: data
@@ -565,26 +565,30 @@ class DataStore extends EventEmitter
         record
 
     # findBy returns the matching records directly (similar to findRecord)
-    # XXX - only supports a single key: value pair for now
     findBy: (type, condition, callback) ->
         return callback "invalid findBy query params!" unless type? and typeof condition is 'object'
 
         @log.debug method:'findBy',type:type,condition:condition, 'issuing findBy on requested entity'
-        [ key, value ] = ([key, value] for key, value of condition)[0]
 
         records = @entities[type]?.registry?.list() or []
+
+        query = condition
+        hit = Object.keys(query).length
         results = records.filter (record) =>
-            try
-                x = record.get(key)
-                x is value or (x instanceof DataStoreModel and x.id is value)
-            catch err
-                @log.warn method:'findBy',type:type,id:record.id,error:err,'skipping bad record...'
-                false
+            match = 0
+            for key,val of query
+                try
+                    x = record.get(key)
+                catch err
+                    @log.warn method:'findBy',type:type,id:record.id,error:err,'skipping bad record...'
+                    return false
+                match += 1 if x is val or (x instanceof DataStoreModel and x.id is val)
+            if match is hit then true else false
 
         unless results?.length > 0
-            @log.warn method:'findBy',type:type,condition:condition,'unable to find any records for the condition!'
+            @log.warn method:'findBy',type:type,condition:query,'unable to find any records for the condition!'
         else
-            @log.debug method:'findBy',type:type,condition:condition,'found %d matching results',results.length
+            @log.debug method:'findBy',type:type,condition:query,'found %d matching results',results.length
         callback? null, results
         results
 
