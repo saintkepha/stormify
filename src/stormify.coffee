@@ -59,7 +59,7 @@ serializer = (data) ->
         when data instanceof Array
             (serializer(entry) for entry in data)
         when data instanceof DataStore.Model
-            data.serialize notag:true
+            data.serialize()
         else
             data
 
@@ -72,19 +72,20 @@ poster = (store,type) -> () ->
 
     store.log?.info stormify:"poster",request:@body,"stormify.poster for '#{type}'"
     try
-        requestor = @req.user
-        record = store.open(requestor).createRecord type, @body[type]
+        record = store.open(@req.user).createRecord type, @body[type]
+        record.save (err, props) =>
+            return @res.send 500, error: err if err?
+            if props?
+                @req.result = record.serialize tag:true
+                store.log?.info query:@params.id,result:@req.result, 'poster results for %s',type
+                @next()
+            else
+                @res.send 404
     catch err
-        return @res.send 500, error: err
+        @res.send 500, error:
+            message: "Unable to create a new record for #{type}"
+            origin: err
 
-    record.save (err, props) =>
-        return @res.send 500, error: err if err?
-        if props?
-            @req.result = record.serialize()
-            store.log?.info query:@params.id,result:@req.result, 'poster results for %s',type
-            @next()
-        else
-            @res.send 404
 
 getter = (store,type) -> () ->
     assert store instanceof DataStore and type? and store.entities.hasOwnProperty(type), "invalid stormify.getter initialization"
@@ -95,19 +96,23 @@ getter = (store,type) -> () ->
     store.log?.info stormify:"getter",query:condition,"stormify.getter for '#{type}'"
 
     # allow condition to be an object
+    try
+        store.open(@req.user).find type, condition, (err, matches) =>
+            return @res.send 500, error: err if err?
 
-    requestor = @req.user
-    store.open(requestor).find type, condition, (err, matches) =>
-        return @res.send 500, error: err if err?
+            if matches? and matches.length > 0
+                o = {}
+                o[type] = serializer(matches)
+                @req.result = o
+                store.log?.info query:condition, result:@req.result, 'getter results for %s',type
+                @next()
+            else
+                @res.send 404
+    catch err
+        @res.send 500, error:
+            message: "Unable to perform find operation for #{type}"
+            origin: err
 
-        if matches? and matches.length > 0
-            o = {}
-            o[type] = serializer(matches)
-            @req.result = o
-            store.log?.info query:condition, result:@req.result, 'getter results for %s',type
-            @next()
-        else
-            @res.send 404
 
 putter = (store,type) -> () ->
     assert store instanceof DataStore and type? and store.entities.hasOwnProperty(type), "invalid stormify.poster initialization"
@@ -118,29 +123,39 @@ putter = (store,type) -> () ->
 
     store.log?.info stormify:"putter",request:@body,"stormify.putter for '#{type}'"
 
-    requestor = @req.user
-    store.open(requestor).updateRecord type, @params.id, @body[type], (err,result) =>
-        return @res.send 500, error: err if err?
+    try
+        store.open(@req.user).updateRecord type, @params.id, @body[type], (err,result) =>
+            return @res.send 500, error: err if err?
 
-        if result? and result instanceof DataStore.Model
-            @req.result = result.serialize()
-            store.log?.info query:@params.id,result:@req.result, 'putter results for %s',type
-            @next()
-        else
-            @res.send 404
+            if result? and result instanceof DataStore.Model
+                @req.result = result.serialize tag:true
+                store.log?.info query:@params.id,result:@req.result, 'putter results for %s',type
+                @next()
+            else
+                @res.send 404
+    catch err
+        @res.send 500, error:
+            message: "Unable to perform update operation for #{type}"
+            origin: err
 
 remover = (store,type) -> () ->
     assert store instanceof DataStore and type? and store.entities.hasOwnProperty(type), "invalid stormify.remover initialization"
 
-    requestor = @req.user
-    store.open(requestor).deleteRecord type, @params.id, (err,result) =>
-        return @res.send 500, error: err if err?
-        if result?
-            @req.result = result
-            store.log?.debug query:@params.id,result:@req.result, 'remover results for %s',type
-            @next()
-        else
-            @res.send 404
+    store.log?.info stormify:"remover","stormify.remover for '#{type}'"
+
+    try
+        store.open(@req.user).deleteRecord type, @params.id, (err,result) =>
+            return @res.send 500, error: err if err?
+            if result?
+                @req.result = result
+                store.log?.debug query:@params.id,result:@req.result, 'remover results for %s',type
+                @next()
+            else
+                @res.send 404
+    catch err
+        @res.send 500, error:
+            message: "Unable to perform delete operation for #{type}"
+            origin: err
 
 #
 # EXPORTS
@@ -176,7 +191,7 @@ module.exports.serve = (store,opts) ->
         @get  "#{baseUrl}/#{collection}",     authorizer(store), getter(store,name), -> @send @req.result
         @get  "#{baseUrl}/#{collection}/:id", authorizer(store), getter(store,name), -> @send @req.result
 
-        unless entity.isReadOnly
+        unless entity.isReadOnly or entity.persist is false
             @post "#{baseUrl}/#{collection}",     authorizer(store), poster(store,name), -> @send @req.result
             @put  "#{baseUrl}/#{collection}/:id", authorizer(store), putter(store,name), -> @send @req.result
             @del  "#{baseUrl}/#{collection}/:id", authorizer(store),remover(store,name), -> @send 204

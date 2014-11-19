@@ -149,12 +149,16 @@ class DataStoreModel extends SR.Data
         for prop,data of @properties when data.value?
             x = data.value
             result[prop] = switch
-                when x instanceof DataStoreModel then x.id
+                when x instanceof DataStoreModel
+                    if opts?.embedded is true
+                        x.serialize()
+                    else
+                        x.id
                 when x instanceof Array
                     (if y instanceof DataStoreModel then y.id else y) for y in x
                 else x
 
-        return result if opts?.notag
+        return result unless opts?.tag is true
 
         data = {}
         data["#{@name}"] = result
@@ -261,6 +265,7 @@ class DataStoreModel extends SR.Data
                 do (property) ->
                     self.log.info "scheduling task for computed property: #{property}..."
                     tasks[property] = (callback) -> self.get property, callback
+                    self.log.info "completed task for computed property: #{property}..."
 
         start = new Date()
         async.parallel tasks, (err, results) =>
@@ -279,10 +284,9 @@ class DataStoreModel extends SR.Data
                 numComputed: Object.keys(tasks).length
                 id: @id
                 computed: Object.keys(tasks)
-                results: results
                 "processing properties took #{duration} ms exceeding threshold!") if duration > 1000
 
-            @log.debug method:'getProperties',id:@id,results:results, 'final results before callback'
+            @log.debug method:'getProperties',id:@id,results:Object.keys(results), 'final results before callback'
             callback results
 
     set: (property, opts..., value) ->
@@ -388,11 +392,16 @@ EventEmitter = require('events').EventEmitter
 
 class DataStoreController extends EventEmitter
 
-    constructor: (@model,opts) ->
-        assert model instanceof DataStoreModel, "unable to create an instance of DS.Controller without underlying model!"
-        @store = model.store
+    constructor: (opts) ->
+        assert opts? and opts.model instanceof DataStoreModel, "unable to create an instance of DS.Controller without underlying model!"
 
-        @log = opts?.log?.child class: @constructor.name
+        # XXX - may change to check for instanceof DataStoreView in the future
+        assert opts? and opts.view  instanceof DataStore, "unable to create an instance of DS.Controller without a proper view!"
+
+        @model = opts.model
+        @store = @view  = opts.view # hack for now to preserve existing controller behavior
+
+        @log = opts.log?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
 
     beforeUpdate: (data) ->
@@ -524,8 +533,8 @@ class DataStore extends EventEmitter
     # main usage functions
 
     # opens the store according to the provided requestor access constraints
-    # this should be subclassed, otherwise, returns itself
-    open: (requestor) -> @
+    # this should be subclassed for view control based on requestor
+    open: (requestor) -> new DataStoreView @, requestor
 
     # register callback for being called on specific event against a collection
     #
@@ -539,7 +548,12 @@ class DataStore extends EventEmitter
         try
             entity = @entities[type]
             record = new entity.model data,store:entity.container,log:@log,useCache:entity.cache
-            record.controller = new entity.controller record,data:data,log:@log
+
+            # XXX - should consider this ONLY when created from a view
+            record.controller = new entity.controller
+                model:record
+                view: this
+                log: @log
 
             @log.info  method:"createRecord", id: record.id, 'created a new record for %s', record.constructor.name
             #@log.debug method:"createRecord", record:record
@@ -561,6 +575,7 @@ class DataStore extends EventEmitter
 
     findRecord: (type, id) ->
         return unless type? and id?
+        assert @entities[type]?.registry instanceof DataStoreRegistry, "trying to findRecord for #{type} without registry!"
         record = @entities[type]?.registry?.get id
         record
 
@@ -609,7 +624,6 @@ class DataStore extends EventEmitter
                 tasks[id] = (callback) ->
                     match = self.findRecord type, id
                     return callback null unless match? and match instanceof DataStoreModel
-
                     # trigger a fresh computation and validations on the match
                     try
                         match.getProperties (properties) -> callback null, match
@@ -670,6 +684,31 @@ class DataStore extends EventEmitter
             for record in records
                 @log.info model:name,record:record.serialize(),method:'dump', "DUMP"
 
+#---------------------------------------------------------------------------------------------------------
+
+# Wrapper around underlying DataStore
+#
+# Used during store.open(requestor) in order to provide access context
+# for store operations. Also, DataStore sub-classes can override the
+# store.open call to manipulate the views into the underlying entities
+class DataStoreView extends DataStore
+
+    extend = require('util')._extend
+
+    constructor: (@store, @requestor) ->
+        assert store instanceof DataStore, "cannot provide View without valid DataStore"
+        @entities = extend {}, @store.entities
+        @log = @store.log?.child class: @constructor.name
+        @log ?= new bunyan name: @constructor.name
+
+    createRecord: (args...) -> @store.createRecord.apply @, args
+    deleteRecord: (args...) -> @store.deleteRecord.apply @, args
+    updateRecord: (args...) -> @store.updateRecord.apply @, args
+    findRecord:   (args...) -> @store.findRecord.apply @, args
+    findBy:       (args...) -> @store.findBy.apply @, args
+    find:         (args...) -> @store.find.apply @, args
+
+#---------------------------------------------------------------------------------------------------------
 
 module.exports = DataStore
 module.exports.Model = DataStoreModel

@@ -61,7 +61,7 @@ class StormRegistry extends EventEmitter
         @log.debug method:'add',key:key, "adding a new entry"
         if @db? and not entry.saved
             data = switch
-                when entry instanceof StormRegistryData then entry.serialize()
+                when entry instanceof StormRegistryData then entry.serialize tag:true
                 else entry
             @log.info method:'add',key:key, "saving entry into persistent db"
             try
@@ -93,7 +93,7 @@ class StormRegistry extends EventEmitter
         @log.debug method:'update',key:key, "updating an entry"
         if @db? and (not entry.saved or entry.changed)
             data = switch
-                when entry instanceof StormRegistryData then entry.serialize()
+                when entry instanceof StormRegistryData then entry.serialize tag:true
                 else entry
             @db.set key, data
             @log.debug method:'update',key:key,data:data, "saved an entry into persistent db"
