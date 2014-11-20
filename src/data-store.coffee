@@ -514,6 +514,7 @@ class DataStore extends EventEmitter
         entity.persist ?= true # default is to persist data
         entity.cache   ?= 1 # default cache for 1 second
         entity.controller ?= DataStoreController
+        entity.collection = collection
 
         @collections[collection] = @entities[entity.name] = entity
         @log.info collection:collection, "registered a collection of '#{collection}' into the store"
@@ -607,19 +608,21 @@ class DataStore extends EventEmitter
         callback? null, results
         results
 
-    # find returns the properties
-    # XXX - enable support for query to be specified as an object with various key/value
     find: (type, query, callback) ->
         _entity = @entities[type]
         return callback "DS: unable to find using unsupported type: #{type}" unless _entity?
-        #return callback "DS: unable to find without specified match condition" unless query?
-        #return callback null, _entity.registry?.list() unless query?
-        query ?= _entity.registry?.keys()
-        query = [ query ] unless query instanceof Array
+
+        ids = switch
+            when query instanceof Array then query
+            when query instanceof Object
+                results = @findBy type, query
+                results.map (record) -> record.id
+            when query? then [ query ]
+            else _entity.registry?.keys()
 
         self = @
         tasks = {}
-        for id in query
+        for id in ids
             do (id) ->
                 tasks[id] = (callback) ->
                     match = self.findRecord type, id

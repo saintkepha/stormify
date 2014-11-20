@@ -90,9 +90,11 @@ poster = (store,type) -> () ->
 getter = (store,type) -> () ->
     assert store instanceof DataStore and type? and store.entities.hasOwnProperty(type), "invalid stormify.getter initialization"
 
-    condition = @query.ids
-    condition ?= @params.id
+    condition = @query.ids  # see if array of IDs
+    condition ?= @params.id # see if a specific ID
+    condition ?= @query     # otherwise likely an object with key/val conditions
 
+    collection = store.entities[type].collection
     store.log?.info stormify:"getter",query:condition,"stormify.getter for '#{type}'"
 
     # allow condition to be an object
@@ -100,14 +102,17 @@ getter = (store,type) -> () ->
         store.open(@req.user).find type, condition, (err, matches) =>
             return @res.send 500, error: err if err?
 
-            if matches? and matches.length > 0
-                o = {}
-                o[type] = serializer(matches)
-                @req.result = o
-                store.log?.info query:condition, result:@req.result, 'getter results for %s',type
-                @next()
-            else
-                @res.send 404
+            o = {}
+            @req.result = switch
+                when (condition instanceof Array) or (condition instanceof Object)
+                    o[collection] = serializer(matches)
+                    o
+                else
+                    o[type] = serializer(matches)
+                    o
+            store.log?.info query:condition, result:@req.result, 'getter results for %s',type
+            @next()
+
     catch err
         @res.send 500, error:
             message: "Unable to perform find operation for #{type}"
