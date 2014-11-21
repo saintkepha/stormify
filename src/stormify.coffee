@@ -18,6 +18,13 @@ Array::pushRecord = (record) ->
     return null if typeof record isnt "object"
     @push record unless @where(id:record.id).length > 0
 
+Array::without = (query) ->
+    return @ if typeof query isnt "object"
+    @filter (item) ->
+        for key,val of query
+            return true unless item[key] is val
+        false # item matched all query params
+
 DataStore = require './data-store'
 
 createStore = (opts) ->
@@ -74,13 +81,11 @@ poster = (store,type) -> () ->
     try
         record = store.open(@req.user).createRecord type, @body[type]
         record.save (err, props) =>
-            return @res.send 500, error: err if err?
-            if props?
-                @req.result = record.serialize tag:true
-                store.log?.info query:@params.id,result:@req.result, 'poster results for %s',type
-                @next()
-            else
-                @res.send 404
+            throw err if err?
+
+            @req.result = record.serialize tag:true
+            store.log?.info query:@params.id,result:@req.result, 'poster results for %s',type
+            @next()
     catch err
         @res.send 500, error:
             message: "Unable to create a new record for #{type}"
@@ -92,7 +97,7 @@ getter = (store,type) -> () ->
 
     condition = @query.ids  # see if array of IDs
     condition ?= @params.id # see if a specific ID
-    condition ?= @query     # otherwise likely an object with key/val conditions
+    condition ?= @query if Object.keys(@query).length isnt 0 # otherwise likely an object with key/val conditions
 
     collection = store.entities[type].collection
     store.log?.info stormify:"getter",query:condition,"stormify.getter for '#{type}'"
@@ -100,7 +105,7 @@ getter = (store,type) -> () ->
     # allow condition to be an object
     try
         store.open(@req.user).find type, condition, (err, matches) =>
-            return @res.send 500, error: err if err?
+            throw err if err?
 
             o = {}
             @req.result = switch
@@ -110,7 +115,8 @@ getter = (store,type) -> () ->
                 else
                     o[type] = serializer(matches)
                     o
-            store.log?.info query:condition, result:@req.result, 'getter results for %s',type
+            store.log?.info query:condition, matches:matches.length, "getter for '%s' was successful",type
+            store.log?.debug query:condition, result:@req.result, 'getter results for %s',type
             @next()
 
     catch err
@@ -130,7 +136,7 @@ putter = (store,type) -> () ->
 
     try
         store.open(@req.user).updateRecord type, @params.id, @body[type], (err,result) =>
-            return @res.send 500, error: err if err?
+            throw err if err?
 
             if result? and result instanceof DataStore.Model
                 @req.result = result.serialize tag:true
@@ -150,7 +156,8 @@ remover = (store,type) -> () ->
 
     try
         store.open(@req.user).deleteRecord type, @params.id, (err,result) =>
-            return @res.send 500, error: err if err?
+            throw err if err?
+
             if result?
                 @req.result = result
                 store.log?.debug query:@params.id,result:@req.result, 'remover results for %s',type

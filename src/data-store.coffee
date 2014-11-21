@@ -49,26 +49,14 @@ class DataStoreRegistry extends SR
         unless entry instanceof DataStoreModel
             @log.info id:id, "restoring #{@entity.name} from registry using underlying entry"
 
-            # XXX - we cannot call createRecord since it will also create controller
-            # which may have a circular reference back to this entity and cause an infinite loop!
-
-            record = @store.createRecord @entity.name, entry
-            record.isSaved = true
-            @update id, record
-
-            # record = new @entity.model(entry, store:@store,log:@log)
-            # record.isSaved = true # this is restoring a previously saved record!
-            # @update id, record
-
-            # we try here since the data from persistence should be good, but relations may be broken
-            #
-            # XXX - do NOT attach controller during get from registry!
-            # try
-            #     # XXX - this just seems wrong somehow...
-            #     record.controller = new @entity.controller record, data:entry,log:@log
-            # catch err
-            #     @log.warn method:"get", error:err, "encountered issue while attaching controller to the new record!"
-            #     throw err
+            # we try here since we don't know if we can successfully createRecord during restoration!
+            try
+                record = @store.createRecord @entity.name, entry
+                record.isSaved = true
+                @update id, record
+            catch err
+                @log.warn method:'get',id:id,error:err, "issue while trying to restore a record of '#{@entity.name}' from registry"
+                return null
 
         super id
 
@@ -84,27 +72,31 @@ class DataStoreModel extends SR.Data
     store: null  # auto-set by DataStore during createRecord
 
     constructor: (data,opts) ->
+        @isSaved = false
+
+        @store = opts?.store
+        @log = opts?.log?.child class: @constructor.name
+        @log ?= new bunyan name: @constructor.name
+        @log.debug data:data, "constructing #{@name}"
+
+        @useCache = opts?.useCache
+
+        # initialize all relations and properties according to schema
+        @relations = {}
         @properties =
             createdOn:  value: null
             modifiedOn: value: null
             accessedOn: value: null
             error:      value: null
 
-        @isSaved = false
-
-        @store = opts?.store
-
-        @log = opts?.log?.child class: @constructor.name
-        @log ?= new bunyan name: @constructor.name
-
-        @log.debug data:data, "constructing #{@name}"
-
-        @useCache = opts?.useCache
-
-        # initialize all properties according to schema
         for key,val of @schema when @schema?
-            do (val) =>
-                @properties[key] = extend {},val
+            @properties[key] = extend {},val
+            @relations[key] = {
+                type: switch val.mode
+                    when 1 then 'belongsTo'
+                    when 2 then 'hasMany'
+                model: val.model
+            } if val.model?
 
         @id = data?.id
         @id ?= uuid.v4()
@@ -185,7 +177,7 @@ class DataStoreModel extends SR.Data
             validator = prop?.opts?.validator
             val = switch
                 when not x?
-                    violations.push "'#{property}' is a required property" if prop.opts?.required
+                    violations.push "'#{property}' is a required property for #{@name}" if prop.opts?.required
                     x
                 when prop.model? and typeof prop.model isnt 'string'
                     unless x instanceof prop.model
@@ -235,11 +227,15 @@ class DataStoreModel extends SR.Data
                     prop.cachedOn = new Date()
                 callback? err, enforce.call(@,value)
 
-            if prop.opts?.async
-                prop.computed.apply @, [cacheComputed,prop]
-            else
-                value = prop.value = prop.computed.apply @
-                callback? null, enforce.call @, prop.value
+            try
+                if prop.opts?.async
+                    prop.computed.apply @, [cacheComputed,prop]
+                else
+                    value = prop.value = prop.computed.apply @
+                    callback? null, enforce.call @, prop.value
+            catch err
+                @log.warn method:'get',property:property,id:@id, "issue during executing computed property"
+                callback? null, err
 
             value # this is to avoid returning a function when direct 'get' is invoked
         else
@@ -310,6 +306,9 @@ class DataStoreModel extends SR.Data
             @log.debug method:'set',property:property,id:@id,"compared #{property} #{cval} with #{nval}... isDirty:#{isDirty}"
             setting = isDirty:isDirty,lvalue:cval,value:nval
             if @properties.hasOwnProperty(property)
+                if @properties[property].opts?.required
+                    assert value?, "must set value for required property '#{property}'"
+
                 @properties[property] = extend @properties[property], setting
             else
                 @properties[property] = setting
@@ -333,6 +332,20 @@ class DataStoreModel extends SR.Data
         properties = [ properties ] unless properties instanceof Array
         dirty = dirty.join ' '
         properties.some (prop) -> ~dirty.indexOf prop
+
+    removeReferences: (model,isSaveAfter) ->
+        return unless model instanceof DataStoreModel
+        for key, relation of @relations
+            continue unless relation.model is model.name
+            @log.info method:'removeReferences',id:@id,"clearing #{key}.#{relation.type} '#{relation.model}' containing #{model.id}..."
+            try
+                switch relation.type
+                    when 'belongsTo' then @set key, null if @get(key)?.id is model.id
+                    when 'hasMany'   then @set key, @get(key).without id:model.id
+            catch err
+                @log.warn method:'removeReferences', error:err, "issue encountered while attempting to clear #{@name}.#{key} where #{relation.model}=#{model.id}"
+
+        @save() if isSaveAfter is true
 
     # specifying 'callback' has special significance
     #
@@ -408,13 +421,14 @@ class DataStoreController extends EventEmitter
         @emit 'beforeUpdate', [ @model.name, @model.id ]
 
     afterUpdate: (data) ->
-        @emit 'afterUpdate', [ @model.name, @model.id ]
         @model.set 'modifiedOn', new Date()
+        @emit 'afterUpdate', [ @model.name, @model.id ]
 
     beforeSave: ->
         @emit 'beforeSave', [ @model.name, @model.id ]
 
         @log.trace method:'beforeSave', 'we should auto resolve belongsTo and hasMany here...'
+
         createdOn = @model.get 'createdOn'
         unless createdOn?
             @model.set 'createdOn', new Date()
@@ -439,7 +453,19 @@ class DataStoreController extends EventEmitter
     beforeDestroy: ->
         @emit 'beforeDestroy', [ @model.name, @model.id ]
 
+        @log.info method:'beforeDestroy', model:@model.name, id:@model.id, 'invoking beforeDestroy to remove external references to this model'
+        # go through all model relations and remove reference back to the @model
+        for key,relation of @model.relations
+            @log.debug method:'beforeDestroy',key:key,relation:relation,"checking #{key}.#{relation.type} '#{relation.model}'"
+            try
+                switch relation.type
+                    when 'belongsTo' then @model.get(key)?.removeReferences? @model, true
+                    when 'hasMany'   then target?.removeReferences? @model, true for target in @model.get(key)
+            catch err
+                @log.warn method:'beforeDestroy',key:key,relation:relation,"ignoring relation to '#{key}' that cannot be resolved"
+
     afterDestroy: ->
+
         @emit 'afterDestroy', [ @model.name, @model.id ]
 
 #---------------------------------------------------------------------------------------------------------
@@ -577,8 +603,7 @@ class DataStore extends EventEmitter
     findRecord: (type, id) ->
         return unless type? and id?
         assert @entities[type]?.registry instanceof DataStoreRegistry, "trying to findRecord for #{type} without registry!"
-        record = @entities[type]?.registry?.get id
-        record
+        @entities[type]?.registry?.get id
 
     # findBy returns the matching records directly (similar to findRecord)
     findBy: (type, condition, callback) ->

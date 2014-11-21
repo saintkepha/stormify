@@ -102,8 +102,7 @@ class StormRegistry extends EventEmitter
         @emit 'updated', entry
         entry
 
-    list: ->
-        @get key for key of @entries
+    list: -> (@get key for key of @entries).filter (x) -> x?
 
     checksum: ->
         crypto = require 'crypto' # for checksum capability on registry
