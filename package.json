@@ -1,6 +1,6 @@
 {
   "name": "stormify",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Stormify enables rapid web applications construction using ember style Data Stores",
   "author": "Peter K Lee <peter@intercloud.net>",
   "main": "lib/stormify.js",
