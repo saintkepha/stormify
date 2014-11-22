@@ -64,15 +64,28 @@ class DataStoreRegistry extends SR
 
 class DataStoreModel extends SR.Data
 
+    @attr      = (type, opts)  -> type: type, opts: opts
+    @belongsTo = (model, opts) -> mode: 1, model: model, opts: opts
+    @hasMany   = (model, opts) -> mode: 2, model: model, opts: opts
+    @computed  = (func, opts)  -> computed: func, opts: opts
+    @computedHistory = (model, opts) -> mode: 3, model: model, opts: opts
+
+    @schema =
+        createdOn:  @attr 'date'
+        modifiedOn: @attr 'date'
+        accessedOn: @attr 'date'
+        error:      @attr 'object'
+
     async = require 'async'
     extend = require('util')._extend
     uuid  = require 'node-uuid'
 
-    schema: null # defined by sub-class
-    store: null  # auto-set by DataStore during createRecord
+    schema: {}  # defined by sub-class
+    store: null # auto-set by DataStore during createRecord
 
     constructor: (data,opts) ->
         @isSaved = false
+        @isDestroyed = false
 
         @store = opts?.store
         @log = opts?.log?.child class: @constructor.name
@@ -83,13 +96,11 @@ class DataStoreModel extends SR.Data
 
         # initialize all relations and properties according to schema
         @relations = {}
-        @properties =
-            createdOn:  value: null
-            modifiedOn: value: null
-            accessedOn: value: null
-            error:      value: null
+        @properties = {}
 
-        for key,val of @schema when @schema?
+        @schema = extend @schema, DataStoreModel.schema
+
+        for key,val of @schema
             @properties[key] = extend {},val
             @relations[key] = {
                 type: switch val.mode
@@ -137,6 +148,8 @@ class DataStoreModel extends SR.Data
     # this operation cannot be async, it means it will extract only known current values.
     # but it doesn't matter since computed data will be re-computed once instantiated
     serialize: (opts) ->
+        assert @isDestroyed is false, "attempting to serialize a destroyed record"
+
         result = id: @id
         for prop,data of @properties when data.value?
             x = data.value
@@ -158,6 +171,7 @@ class DataStoreModel extends SR.Data
 
     get: (property, opts..., callback) ->
         assert @properties.hasOwnProperty(property), "attempting to retrieve '#{property}' which doesn't exist in this model"
+        assert @isDestroyed is false, "attempting to retrieve '#{property}' from a destroyed record"
 
         prop = @properties[property]
 
@@ -234,7 +248,7 @@ class DataStoreModel extends SR.Data
                     value = prop.value = prop.computed.apply @
                     callback? null, enforce.call @, prop.value
             catch err
-                @log.warn method:'get',property:property,id:@id, "issue during executing computed property"
+                @log.warn method:'get',property:property,id:@id,error:err, "issue during executing computed property"
                 callback? null, err
 
             value # this is to avoid returning a function when direct 'get' is invoked
@@ -259,9 +273,9 @@ class DataStoreModel extends SR.Data
         for property, value of props
             if typeof value.computed is 'function'
                 do (property) ->
-                    self.log.info "scheduling task for computed property: #{property}..."
+                    self.log.debug "scheduling task for computed property: #{property}..."
                     tasks[property] = (callback) -> self.get property, callback
-                    self.log.info "completed task for computed property: #{property}..."
+                    self.log.debug "completed task for computed property: #{property}..."
 
         start = new Date()
         async.parallel tasks, (err, results) =>
@@ -286,6 +300,8 @@ class DataStoreModel extends SR.Data
             callback results
 
     set: (property, opts..., value) ->
+        assert @isDestroyed is false, "attempting to set a value to a destroyed record"
+
         return if @schema? and not @properties.hasOwnProperty(property)
 
         if typeof value is 'function'
@@ -318,6 +334,8 @@ class DataStoreModel extends SR.Data
     setProperties: (obj) -> @set property, value for property, value of obj
 
     update: (data) ->
+        assert @isDestroyed is false, "attempting to update a destroyed record"
+
         # if controller associated, issue the updateRecord action call
         @controller?.beforeUpdate? data
         @setProperties data
@@ -337,7 +355,7 @@ class DataStoreModel extends SR.Data
         return unless model instanceof DataStoreModel
         for key, relation of @relations
             continue unless relation.model is model.name
-            @log.info method:'removeReferences',id:@id,"clearing #{key}.#{relation.type} '#{relation.model}' containing #{model.id}..."
+            @log.debug method:'removeReferences',id:@id,"clearing #{key}.#{relation.type} '#{relation.model}' containing #{model.id}..."
             try
                 switch relation.type
                     when 'belongsTo' then @set key, null if @get(key)?.id is model.id
@@ -356,6 +374,8 @@ class DataStoreModel extends SR.Data
     # no operation will take place!
     #
     save: (callback) ->
+        assert @isDestroyed is false, "attempting to save a destroyed record"
+
         switch
             # when called with callback ALWAYS perform commit action
             when callback?
@@ -397,6 +417,7 @@ class DataStoreModel extends SR.Data
         @isDestroy = true
         @store?.commit @
         @controller?.afterDestroy?()
+        @isDestroyed = true
         callback? null, true
 
 #---------------------------------------------------------------------------------------------------------
@@ -409,7 +430,7 @@ class DataStoreController extends EventEmitter
         assert opts? and opts.model instanceof DataStoreModel, "unable to create an instance of DS.Controller without underlying model!"
 
         # XXX - may change to check for instanceof DataStoreView in the future
-        assert opts? and opts.view  instanceof DataStore, "unable to create an instance of DS.Controller without a proper view!"
+        #assert opts? and opts.view  instanceof DataStoreView, "unable to create an instance of DS.Controller without a proper view!"
 
         @model = opts.model
         @store = @view  = opts.view # hack for now to preserve existing controller behavior
@@ -470,7 +491,43 @@ class DataStoreController extends EventEmitter
 
 #---------------------------------------------------------------------------------------------------------
 
+# Wrapper around underlying DataStore
+#
+# Used during store.open(requestor) in order to provide access context
+# for store operations. Also, DataStore sub-classes can override the
+# store.open call to manipulate the views into the underlying entities
+class DataStoreView
+
+    extend = require('util')._extend
+
+    constructor: (@store, @requestor) ->
+        assert store instanceof DataStore, "cannot provide View without valid DataStore"
+        @entities = extend {}, @store.entities
+        @log = @store.log?.child class: @constructor.name
+        @log ?= new bunyan name: @constructor.name
+
+    createRecord: (args...) -> @store.createRecord.apply @, args
+    deleteRecord: (args...) -> @store.deleteRecord.apply @, args
+    updateRecord: (args...) -> @store.updateRecord.apply @, args
+    findRecord:   (args...) -> @store.findRecord.apply @, args
+    findBy:       (args...) -> @store.findBy.apply @, args
+    find:         (args...) -> @store.find.apply @, args
+
+#---------------------------------------------------------------------------------------------------------
+
 class DataStore extends EventEmitter
+
+    # various extensions available from this class object
+    @Model      = DataStoreModel
+    @Controller = DataStoreController
+    @View       = DataStoreView
+    @Registry   = DataStoreRegistry
+
+    @attr       = @Model.attr
+    @belongsTo  = @Model.belongsTo
+    @hasMany    = @Model.hasMany
+    @computed   = @Model.computed
+    @computedHistory = @Model.computedHistory
 
     async = require 'async'
     uuid  = require 'node-uuid'
@@ -714,37 +771,4 @@ class DataStore extends EventEmitter
 
 #---------------------------------------------------------------------------------------------------------
 
-# Wrapper around underlying DataStore
-#
-# Used during store.open(requestor) in order to provide access context
-# for store operations. Also, DataStore sub-classes can override the
-# store.open call to manipulate the views into the underlying entities
-class DataStoreView extends DataStore
-
-    extend = require('util')._extend
-
-    constructor: (@store, @requestor) ->
-        assert store instanceof DataStore, "cannot provide View without valid DataStore"
-        @entities = extend {}, @store.entities
-        @log = @store.log?.child class: @constructor.name
-        @log ?= new bunyan name: @constructor.name
-
-    createRecord: (args...) -> @store.createRecord.apply @, args
-    deleteRecord: (args...) -> @store.deleteRecord.apply @, args
-    updateRecord: (args...) -> @store.updateRecord.apply @, args
-    findRecord:   (args...) -> @store.findRecord.apply @, args
-    findBy:       (args...) -> @store.findBy.apply @, args
-    find:         (args...) -> @store.find.apply @, args
-
-#---------------------------------------------------------------------------------------------------------
-
 module.exports = DataStore
-module.exports.Model = DataStoreModel
-module.exports.Controller = DataStoreController
-module.exports.Registry = DataStoreRegistry
-
-module.exports.attr = (type, opts) -> type: type, opts: opts
-module.exports.belongsTo = (model, opts) -> mode: 1, model: model, opts: opts
-module.exports.hasMany = (model, opts) -> mode: 2, model: model, opts: opts
-module.exports.computed = (func, opts) -> computed: func, opts: opts
-module.exports.computedHistory = (model, opts) -> mode: 3, model: model, opts: opts
