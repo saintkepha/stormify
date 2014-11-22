@@ -119,7 +119,9 @@ class DataStoreModel extends SR.Data
         violations = []
         for name,prop of @properties
             #console.log name
-            prop.value ?= prop.opts?.defaultValue
+            prop.value ?= switch
+                when typeof prop.opts?.defaultValue is 'function' then prop.opts.defaultValue()
+                else prop.opts?.defaultValue
             unless prop.value
                 violations.push "'#{name}' is required for #{@constructor.name}" if prop.opts?.required
             else
@@ -185,7 +187,9 @@ class DataStoreModel extends SR.Data
 
             @log.debug "checking #{property} with #{x}"
 
-            x ?= prop.opts?.defaultValue
+            x ?= switch
+                when typeof prop.opts?.defaultValue is 'function' then prop.opts.defaultValue()
+                else prop.opts?.defaultValue
 
             violations = []
             validator = prop?.opts?.validator
@@ -684,7 +688,7 @@ class DataStore extends EventEmitter
             if match is hit then true else false
 
         unless results?.length > 0
-            @log.warn method:'findBy',type:type,condition:query,'unable to find any records for the condition!'
+            @log.debug method:'findBy',type:type,condition:query,'unable to find any records for the condition!'
         else
             @log.debug method:'findBy',type:type,condition:query,'found %d matching results',results.length
         callback? null, results
@@ -717,7 +721,7 @@ class DataStore extends EventEmitter
                         # below silently ignores this record
                         callback null
 
-        @log.info method:'find',type:type,query:query, 'issuing find on requested entity'
+        @log.debug method:'find',type:type,query:query, 'issuing find on requested entity'
         async.parallel tasks, (err, results) =>
             if err?
                 @log.error err, "error was encountered while performing find operation on #{type} with #{query}!"
@@ -725,7 +729,7 @@ class DataStore extends EventEmitter
 
             matches = (entry for key, entry of results when entry?)
             unless matches?.length > 0
-                @log.warn method:'find',type:type,query:query,'unable to find any records matching the query!'
+                @log.debug method:'find',type:type,query:query,'unable to find any records matching the query!'
             else
                 @log.debug method:'find',type:type,query:query,'found %d matching results',matches.length
 
