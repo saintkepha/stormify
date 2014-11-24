@@ -173,7 +173,7 @@ class DataStoreModel extends SR.Data
 
     get: (property, opts..., callback) ->
         assert @properties.hasOwnProperty(property), "attempting to retrieve '#{property}' which doesn't exist in this model"
-        assert @isDestroyed is false, "attempting to retrieve '#{property}' from a destroyed record"
+        #assert @isDestroyed is false, "attempting to retrieve '#{property}' from a destroyed record"
 
         prop = @properties[property]
 
