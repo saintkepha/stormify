@@ -126,7 +126,7 @@ getter = (store,type) -> () ->
                     o[collection] = serializer(matches)
                     o
                 else
-                    o[type] = serializer(matches)
+                    o[type] = serializer(matches[0])
                     o
             store.log?.info query:condition, matches:matches.length, "getter for '%s' was successful",type
             store.log?.debug query:condition, result:@req.result, 'getter results for %s',type
@@ -197,6 +197,7 @@ module.exports =
 
 # must be called in the context of a given web server
 module.exports.serve = (store,opts) ->
+    @del ?= @delete
     assert this.post? and this.get? and this.put? and this.del?, "cannot stormify.serve without CRUD operators present in the running context!"
     assert store instanceof DataStore, "cannot stormify.serve without valid instance of DataStore!"
 

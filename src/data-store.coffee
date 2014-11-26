@@ -53,7 +53,7 @@ class DataStoreRegistry extends SR
             try
                 record = @store.createRecord @entity.name, entry
                 record.isSaved = true
-                @update id, record
+                @update id, record, true
             catch err
                 @log.warn method:'get',id:id,error:err, "issue while trying to restore a record of '#{@entity.name}' from registry"
                 return null

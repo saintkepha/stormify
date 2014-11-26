@@ -88,7 +88,7 @@ class StormRegistry extends EventEmitter
         if @db? and entry? and entry.saved
             @db.rm key
 
-    update: (key, entry) ->
+    update: (key, entry, suppress) ->
         return unless key? and entry?
         @log.debug method:'update',key:key, "updating an entry"
         if @db? and (not entry.saved or entry.changed)
@@ -99,7 +99,7 @@ class StormRegistry extends EventEmitter
             @log.debug method:'update',key:key,data:data, "saved an entry into persistent db"
             entry.saved = true
         @entries[key] = entry
-        @emit 'updated', entry
+        @emit 'updated', entry unless suppress is true
         entry
 
     list: -> (@get key for key of @entries).filter (x) -> x?
