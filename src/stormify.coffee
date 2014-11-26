@@ -122,7 +122,7 @@ getter = (store,type) -> () ->
 
             o = {}
             @req.result = switch
-                when (condition instanceof Array) or (condition instanceof Object)
+                when matches.length > 1
                     o[collection] = serializer(matches)
                     o
                 else
