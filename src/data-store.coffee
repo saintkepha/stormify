@@ -683,7 +683,7 @@ class DataStore extends EventEmitter
                     x = record.get(key)
                     x = switch
                         when x instanceof DataStoreModel then x.id
-                        when typeof x is 'boolean' then (if x then 'true' else 'false')
+                        when typeof x is 'boolean' and typeof value is 'string' then (if x then 'true' else 'false')
                         else x
                 catch err
                     @log.warn method:'findBy',type:type,id:record.id,error:err,'skipping bad record...'
