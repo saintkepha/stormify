@@ -670,7 +670,7 @@ class DataStore extends EventEmitter
     findBy: (type, condition, callback) ->
         return callback "invalid findBy query params!" unless type? and typeof condition is 'object'
 
-        @log.debug method:'findBy',type:type,condition:condition, 'issuing findBy on requested entity'
+        @log.info method:'findBy',type:type,condition:condition, 'issuing findBy on requested entity'
 
         records = @entities[type]?.registry?.list() or []
 
@@ -681,6 +681,10 @@ class DataStore extends EventEmitter
             for key,val of query
                 try
                     x = record.get(key)
+                    x = switch
+                        when x instanceof DataStoreModel then x.id
+                        when typeof x is 'boolean' then (if x then 'true' else 'false')
+                        else x
                 catch err
                     @log.warn method:'findBy',type:type,id:record.id,error:err,'skipping bad record...'
                     return false
@@ -688,9 +692,9 @@ class DataStore extends EventEmitter
             if match is hit then true else false
 
         unless results?.length > 0
-            @log.debug method:'findBy',type:type,condition:query,'unable to find any records for the condition!'
+            @log.info method:'findBy',type:type,condition:query,'unable to find any records for the condition!'
         else
-            @log.debug method:'findBy',type:type,condition:query,'found %d matching results',results.length
+            @log.info method:'findBy',type:type,condition:query,'found %d matching results',results.length
         callback? null, results
         results
 
