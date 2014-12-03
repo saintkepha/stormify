@@ -90,13 +90,17 @@ poster = (store,type) -> (req,res,next) ->
     try
         record = store.open(req.user).createRecord type, req.body[type]
         record.save (err, props) =>
-            throw err if err?
+            unless err?
+                res.locals.result = record.serialize tag:true
+                store.log?.info query:req.params.id,result:res.locals.result, 'poster results for %s',type
+                next()
+            else
+                res.status(500).send error:
+                    message: "Unable to create a new record for #{type}"
+                    origin: err
 
-            res.locals.result = record.serialize tag:true
-            store.log?.info query:req.params.id,result:res.locals.result, 'poster results for %s',type
-            next()
     catch err
-        res.status(500).send error:
+        return res.status(500).send error:
             message: "Unable to create a new record for #{type}"
             origin: err
 
@@ -133,7 +137,7 @@ getter = (store,type) -> (req,res,next) ->
             store.log?.debug query:condition, result:res.locals.result, 'getter results for %s',type
             next()
     catch err
-        res.status(500).send error:
+        return res.status(500).send error:
             message: "Unable to perform find operation for #{type}"
             origin: err
 
@@ -158,7 +162,7 @@ putter = (store,type) -> (req,res,next) ->
             else
                 res.status(404).send()
     catch err
-        res.status(500).send error:
+        return res.status(500).send error:
             message: "Unable to perform update operation for #{type}"
             origin: err
 
@@ -169,16 +173,14 @@ remover = (store,type) -> (req,res,next) ->
 
     try
         store.open(req.user).deleteRecord type, req.params.id, (err,result) =>
-            throw err if err?
-
-            if result?
+            unless err? and result is false
                 res.locals.result = result
                 store.log?.debug query:req.params.id,result:res.locals.result, 'remover results for %s',type
                 next()
             else
-                res.status(400).send
+                res.status(400).send()
     catch err
-        res.status(500).send error:
+        return res.status(500).send error:
             message: "Unable to perform delete operation for #{type}"
             origin: err
 

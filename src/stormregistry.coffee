@@ -63,7 +63,7 @@ class StormRegistry extends EventEmitter
             data = switch
                 when entry instanceof StormRegistryData then entry.serialize tag:true
                 else entry
-            @log.info method:'add',key:key, "saving entry into persistent db"
+            @log.debug method:'add',key:key, "saving entry into persistent db"
             try
                 @db.set key, data
                 entry.saved = true

@@ -47,7 +47,7 @@ class DataStoreRegistry extends SR
         entry = super id
         return null unless entry?
         unless entry instanceof DataStoreModel
-            @log.info id:id, "restoring #{@entity.name} from registry using underlying entry"
+            @log.debug id:id, "restoring #{@entity.name} from registry using underlying entry"
 
             # we try here since we don't know if we can successfully createRecord during restoration!
             try
@@ -84,8 +84,7 @@ class DataStoreModel extends SR.Data
     store: null # auto-set by DataStore during createRecord
 
     constructor: (data,opts) ->
-        @isSaved = false
-        @isDestroyed = false
+        @isSaving = @isSaved = @isDestroy = @isDestroyed = false
 
         @store = opts?.store
         @log = opts?.log?.child class: @constructor.name
@@ -252,8 +251,9 @@ class DataStoreModel extends SR.Data
                     value = prop.value = prop.computed.apply @
                     callback? null, enforce.call @, prop.value
             catch err
-                @log.warn method:'get',property:property,id:@id,error:err, "issue during executing computed property"
-                callback? null, err
+                @log.debug method:'get',property:property,id:@id,error:err, "issue during executing computed property"
+                callback? err
+                #callback? null, err
 
             value # this is to avoid returning a function when direct 'get' is invoked
         else
@@ -283,6 +283,8 @@ class DataStoreModel extends SR.Data
 
         start = new Date()
         async.parallel tasks, (err, results) =>
+            return callback err if err?
+
             results.id = @id
             @log.trace method:'getProperties',id:@id,results:results, 'computed properties'
             statics = {}
@@ -301,12 +303,12 @@ class DataStoreModel extends SR.Data
                 "processing properties took #{duration} ms exceeding threshold!") if duration > 1000
 
             @log.debug method:'getProperties',id:@id,results:Object.keys(results), 'final results before callback'
-            callback results
+            callback null, results
 
     set: (property, opts..., value) ->
         assert @isDestroyed is false, "attempting to set a value to a destroyed record"
 
-        return if @schema? and not @properties.hasOwnProperty(property)
+        return @ if @schema? and not @properties.hasOwnProperty(property)
 
         if typeof value is 'function'
             if property instanceof Array
@@ -332,8 +334,11 @@ class DataStoreModel extends SR.Data
                 @properties[property] = extend @properties[property], setting
             else
                 @properties[property] = setting
+
         # now apply opts into the property if applicable
         #@properties[property].opts = opts if opts?
+
+        @ # make it chainable
 
     setProperties: (obj) -> @set property, value for property, value of obj
 
@@ -357,6 +362,7 @@ class DataStoreModel extends SR.Data
 
     removeReferences: (model,isSaveAfter) ->
         return unless model instanceof DataStoreModel
+        changes = 0
         for key, relation of @relations
             continue unless relation.model is model.name
             @log.debug method:'removeReferences',id:@id,"clearing #{key}.#{relation.type} '#{relation.model}' containing #{model.id}..."
@@ -365,9 +371,9 @@ class DataStoreModel extends SR.Data
                     when 'belongsTo' then @set key, null if @get(key)?.id is model.id
                     when 'hasMany'   then @set key, @get(key).without id:model.id
             catch err
-                @log.warn method:'removeReferences', error:err, "issue encountered while attempting to clear #{@name}.#{key} where #{relation.model}=#{model.id}"
+                @log.debug method:'removeReferences', error:err, "issue encountered while attempting to clear #{@name}.#{key} where #{relation.model}=#{model.id}"
 
-        @save() if isSaveAfter is true
+        @save() if @isSaved is true and isSaveAfter is true and @isDirty()
 
     # specifying 'callback' has special significance
     #
@@ -380,49 +386,57 @@ class DataStoreModel extends SR.Data
     save: (callback) ->
         assert @isDestroyed is false, "attempting to save a destroyed record"
 
-        switch
-            # when called with callback ALWAYS perform commit action
-            when callback?
-                try
-                    @controller?.beforeSave?()
-                catch err
-                    @log.error method:'save',record:@name,id:@id,error:err,'failed to satisfy beforeSave controller calls'
-                    callback err, null
-                    throw err
+        if @isSaving is true
+            return callback? null, @
 
-                @getProperties (props) =>
-                    unless props?
-                        @log.error method:'save',id:@id,'failed to retrieve properties following save!'
-                        return callback 'save failed to retrieve updated properties!', null
+        @isSaving = true
+        try
+            @controller?.beforeSave?()
+        catch err
+            @log.error method:'save',record:@name,id:@id,error:err,'failed to satisfy beforeSave controller hook'
+            @isSaving = false
+            callback? err
+            throw err
 
-                    @log.info method:'save',record:@name,id:@id, "saving a 'new' record"
-                    try
-                        @store?.commit @
-                        @clearDirty()
-                        @isSaved = true
-                        @controller?.afterSave?()
-                        callback null, @, props
-                    catch err
-                        @log.error method:'save',record:@name,id:@id,error:err,'failed to commit record to the store!'
-                        callback err, null
-                        throw err
+        # getting properties performs validations on this model
+        @getProperties (err,props) =>
+            unless props?
+                @log.error method:'save',id:@id,'failed to retrieve validated properties before committing to store'
+                return callback 'save failed to retrieve updated properties!'
 
-            # when this record hasn't been saved yet, DO NOT commit to the store!
-            when not @isSaved then return
-
-            # otherwise, we try to commit
-            else
+            @log.debug method:'save',record:@name,id:@id, "saving record"
+            try
                 @store?.commit @
+                @controller?.afterSave?()
                 @clearDirty()
+                @isSaved = true
+                callback? null, @, props
+            catch err
+                @log.error method:'save',record:@name,id:@id,error:err,'failed to commit record to the store!'
+
+                # we self-destruct only if this record wasn't saved previously
+                @destroy() unless @isSaved is true
+
+                @log.warn method:'save',error:err,'after self destruction...'
+
+                callback? err
+                throw err
+
+            finally
+                @isSaving = false
 
     destroy: (callback) ->
         # if controller associated, issue the destroy action call
-        @controller?.beforeDestroy?()
         @isDestroy = true
-        @store?.commit @
-        @controller?.afterDestroy?()
-        @isDestroyed = true
-        callback? null, true
+        try
+            @controller?.beforeDestroy?()
+            @store?.commit @
+            @isDestroyed = true
+            @controller?.afterDestroy?()
+        catch err
+            @log.warn method:'destroy',record:@name,id:@id,error:err,'encountered issues during destroy, ignoring...'
+        finally
+            callback? null, true
 
 #---------------------------------------------------------------------------------------------------------
 
@@ -478,18 +492,17 @@ class DataStoreController extends EventEmitter
     beforeDestroy: ->
         @emit 'beforeDestroy', [ @model.name, @model.id ]
 
-        @log.info method:'beforeDestroy', model:@model.name, id:@model.id, 'invoking beforeDestroy to remove external references to this model'
+    afterDestroy: ->
+        @log.info method:'afterDestroy', model:@model.name, id:@model.id, 'invoking afterDestroy to remove external references to this model'
         # go through all model relations and remove reference back to the @model
         for key,relation of @model.relations
-            @log.debug method:'beforeDestroy',key:key,relation:relation,"checking #{key}.#{relation.type} '#{relation.model}'"
+            @log.debug method:'afterDestroy',key:key,relation:relation,"checking #{key}.#{relation.type} '#{relation.model}'"
             try
                 switch relation.type
                     when 'belongsTo' then @model.get(key)?.removeReferences? @model, true
                     when 'hasMany'   then target?.removeReferences? @model, true for target in @model.get(key)
             catch err
-                @log.warn method:'beforeDestroy',key:key,relation:relation,"ignoring relation to '#{key}' that cannot be resolved"
-
-    afterDestroy: ->
+                @log.debug method:'afterDestroy',key:key,relation:relation,"ignoring relation to '#{key}' that cannot be resolved"
 
         @emit 'afterDestroy', [ @model.name, @model.id ]
 
@@ -510,7 +523,13 @@ class DataStoreView
         @log = @store.log?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
 
-    createRecord: (args...) -> @store.createRecord.apply @, args
+        #@transactions = []
+
+    createRecord: (args...) ->
+        record = @store.createRecord.apply @, args
+        #@transactions.push create:record
+        record
+
     deleteRecord: (args...) -> @store.deleteRecord.apply @, args
     updateRecord: (args...) -> @store.updateRecord.apply @, args
     findRecord:   (args...) -> @store.findRecord.apply @, args
@@ -643,8 +662,7 @@ class DataStore extends EventEmitter
                 view: this
                 log: @log
 
-            @log.info  method:"createRecord", id: record.id, 'created a new record for %s', record.constructor.name
-            #@log.debug method:"createRecord", record:record
+            @log.debug  method:"createRecord", id: record.id, 'created a new record for %s', record.constructor.name
         catch err
             @log.error error:err, "unable to instantiate a new DS.Model for #{type}"
             throw err
@@ -652,12 +670,12 @@ class DataStore extends EventEmitter
 
     deleteRecord: (type, id, callback) ->
         match = @findRecord type, id
-        callback null unless match?
+        return callback? null unless match?
         match.destroy callback
 
     updateRecord: (type, id, data, callback) ->
         record = @findRecord type, id
-        callback null unless record?
+        return callback? null unless record?
         record.update data
         record.save callback
 
@@ -719,11 +737,11 @@ class DataStore extends EventEmitter
                     return callback null unless match? and match instanceof DataStoreModel
                     # trigger a fresh computation and validations on the match
                     try
-                        match.getProperties (properties) -> callback null, match
+                        match.getProperties (err, props) -> callback null, match
                     catch err
                         self.log.warn error:err,type:type,id:id, 'unable to obtain validated properties from the matching record'
                         # below silently ignores this record
-                        callback null
+                        return callback null
 
         @log.debug method:'find',type:type,query:query, 'issuing find on requested entity'
         async.parallel tasks, (err, results) =>
