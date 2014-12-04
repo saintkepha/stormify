@@ -238,14 +238,14 @@ class DataStoreModel extends SR.Data
                     @log.info method:'get',property:property,id:@id, "re-computing expired cached property (#{cachedFor} secs > #{@useCache} secs)"
 
             @log.debug method:'get',property:property,id:@id,"computing a new value!"
-            cacheComputed = (err, value) =>
-                return callback? err, value if err?
-                value = prop.value = enforce.call @, value
-                prop.cachedOn = new Date() if @useCache
 
             try
                 if prop.opts?.async
-                    prop.computed.apply @, [cacheComputed,prop]
+                    prop.computed.call @, (err, value) =>
+                        return callback? err, value if err?
+                        value = prop.value = enforce.call @, value
+                        prop.cachedOn = new Date() if @useCache
+                        callback? null, value
                 else
                     x = prop.computed.apply @
                     value = prop.value = enforce.call @, x
