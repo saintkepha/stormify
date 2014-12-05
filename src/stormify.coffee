@@ -96,13 +96,15 @@ poster = (store,type) -> (req,res,next) ->
                 next()
             else
                 res.status(500).send error:
-                    message: "Unable to create a new record for #{type}"
+                    message: "Unable to create a new record for #{type} during save"
                     origin: err
 
     catch err
-        return res.status(500).send error:
-            message: "Unable to create a new record for #{type}"
-            origin: err
+        unless res.headersSent
+            res.status(500).send error:
+                message: "Unable to create a new record for #{type}"
+                origin: err
+            throw err
 
 
 getter = (store,type) -> (req,res,next) ->

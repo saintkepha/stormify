@@ -238,22 +238,22 @@ class DataStoreModel extends SR.Data
                     @log.info method:'get',property:property,id:@id, "re-computing expired cached property (#{cachedFor} secs > #{@useCache} secs)"
 
             @log.debug method:'get',property:property,id:@id,"computing a new value!"
-            cacheComputed = (err, value) =>
-                unless err and @useCache
-                    prop.value = value
-                    prop.cachedOn = new Date()
-                callback? err, enforce.call(@,value)
 
             try
                 if prop.opts?.async
-                    prop.computed.apply @, [cacheComputed,prop]
+                    prop.computed.call @, (err, value) =>
+                        return callback? err, value if err?
+                        value = prop.value = enforce.call @, value
+                        prop.cachedOn = new Date() if @useCache
+                        callback? null, value
                 else
-                    value = prop.value = prop.computed.apply @
-                    callback? null, enforce.call @, prop.value
+                    x = prop.computed.apply @
+                    value = prop.value = enforce.call @, x
+                    callback? null, value
             catch err
                 @log.debug method:'get',property:property,id:@id,error:err, "issue during executing computed property"
                 callback? err
-                #callback? null, err
+                return value
 
             value # this is to avoid returning a function when direct 'get' is invoked
         else
@@ -407,9 +407,10 @@ class DataStoreModel extends SR.Data
             @log.debug method:'save',record:@name,id:@id, "saving record"
             try
                 @store?.commit @
-                @controller?.afterSave?()
                 @clearDirty()
+                @controller?.afterSave?()
                 @isSaved = true
+
                 callback? null, @, props
             catch err
                 @log.error method:'save',record:@name,id:@id,error:err,'failed to commit record to the store!'
@@ -704,7 +705,7 @@ class DataStore extends EventEmitter
                         when typeof x is 'boolean' and typeof val is 'string' then (if x then 'true' else 'false')
                         else x
                 catch err
-                    @log.warn method:'findBy',type:type,id:record.id,error:err,'skipping bad record...'
+                    @log.debug method:'findBy',type:type,id:record.id,error:err,'skipping bad record...'
                     return false
                 match += 1 if x is val or (x instanceof DataStoreModel and x.id is val)
             if match is hit then true else false
