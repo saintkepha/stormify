@@ -60,6 +60,13 @@ class DataStoreRegistry extends SR
 
         super id
 
+    # this overrides parent registry.update call to suppress event
+    # emit and instead provide additional details (changed properties) with the event
+    update: (key, entry, suppress) ->
+        super key, entry, true # force suppressing event
+        @emit 'updated', entry, entry.dirtyProperties() unless suppress is true
+        entry
+
 #---------------------------------------------------------------------------------------------------------
 
 class DataStoreModel extends SR.Data
@@ -144,6 +151,9 @@ class DataStoreModel extends SR.Data
 
         @log.debug "done constructing #{@name}"
         assert violations.length == 0, violations
+
+    typeOf:     (property) -> @properties[property]?.type
+    instanceOf: (property) -> @properties[property]?.model
 
     # customize how data gets saved into DataStoreRegistry
     # this operation cannot be async, it means it will extract only known current values.
@@ -375,14 +385,6 @@ class DataStoreModel extends SR.Data
 
         @save() if @isSaved is true and isSaveAfter is true and @isDirty()
 
-    # specifying 'callback' has special significance
-    #
-    # when 'callback' is passed in, it indicates that the caller is the original CREATOR
-    # of this record and would handle the case where this record is NOT yet saved
-    #
-    # this means that when it is called without callback and the record is NOT yet saved
-    # no operation will take place!
-    #
     save: (callback) ->
         assert @isDestroyed is false, "attempting to save a destroyed record"
 
@@ -426,6 +428,9 @@ class DataStoreModel extends SR.Data
             finally
                 @isSaving = false
 
+    # a method to invoke an action on the controller for the record
+    invoke: (action, params, data) -> @controller?.actions[action]? params, data
+
     destroy: (callback) ->
         # if controller associated, issue the destroy action call
         @isDestroy = true
@@ -444,6 +449,8 @@ class DataStoreModel extends SR.Data
 EventEmitter = require('events').EventEmitter
 
 class DataStoreController extends EventEmitter
+
+    actions: {} # to be subclassed by controllers
 
     constructor: (opts) ->
         assert opts? and opts.model instanceof DataStoreModel, "unable to create an instance of DS.Controller without underlying model!"
