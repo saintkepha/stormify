@@ -229,11 +229,16 @@ module.exports.serve = (store,opts) ->
 
             # attach controller actions to the REST endpoint
             for action of entity.controller?::actions
-                store.log?.info method: "serve",
-                    "exposing actions: #{baseUrl}/#{collection}/:id/#{action}"
-                @post "#{baseUrl}/#{collection}/:id/#{action}", authorizer(store), getter(store,name), ->
-                    record = @res.locals.matches[0] # only assume ONE
-                    @send record.invoke action, @req.query, @req.body
+                do (action) =>
+                    store.log?.info method: "serve",
+                        "exposing actions: #{baseUrl}/#{collection}/:id/#{action}"
+                    @post "#{baseUrl}/#{collection}/:id/#{action}", authorizer(store), getter(store,name), ->
+                        record = @res.locals.matches[0] # only assume ONE
+                        record.invoke action, @req.query, @req.body
+                        .then(
+                            (response) => @send response
+                            (error) => @res.status(500).send error: error
+                        )
 
         store.log?.info method:"serve",
             "auto-generated REST endpoints at: #{baseUrl}/#{collection}"

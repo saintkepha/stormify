@@ -429,7 +429,9 @@ class DataStoreModel extends SR.Data
                 @isSaving = false
 
     # a method to invoke an action on the controller for the record
-    invoke: (action, params, data) -> @controller?.actions[action]? params, data
+    invoke: (action, params, data) ->
+        new (require 'promise') (resolve) =>
+            resolve @controller?.actions[action]?.call(@controller, params, data)
 
     destroy: (callback) ->
         # if controller associated, issue the destroy action call
