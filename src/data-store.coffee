@@ -96,7 +96,7 @@ class DataStoreModel extends SR.Data
         @store = opts?.store
         @log = opts?.log?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
-        @log.debug data:data, "constructing #{@name}"
+        @log.debug id:data.id, "constructing #{@name}"
 
         @useCache = opts?.useCache
 
@@ -126,7 +126,7 @@ class DataStoreModel extends SR.Data
         for name,prop of @properties
             #console.log name
             prop.value ?= switch
-                when typeof prop.opts?.defaultValue is 'function' then prop.opts.defaultValue()
+                when typeof prop.opts?.defaultValue is 'function' then prop.opts.defaultValue.call @
                 else prop.opts?.defaultValue
             unless prop.value
                 violations.push "'#{name}' is required for #{@constructor.name}" if prop.opts?.required
@@ -194,10 +194,10 @@ class DataStoreModel extends SR.Data
         enforce = (x) ->
             return x unless enforceCheck
 
-            @log.debug "checking #{property} with #{x}"
+            @log.debug "checking #{property} with '#{x}'"
 
             x ?= switch
-                when typeof prop.opts?.defaultValue is 'function' then prop.opts.defaultValue()
+                when typeof prop.opts?.defaultValue is 'function' then prop.opts.defaultValue.call @
                 else prop.opts?.defaultValue
 
             violations = []
@@ -229,8 +229,9 @@ class DataStoreModel extends SR.Data
                         when 1 then record
                         when 2 then [ record ]
                         when 3 then null # null for now
-                when x instanceof Array and prop.opts.unique then x.unique()
+                when x instanceof Array and prop.opts?.unique then x.unique()
                 else x
+
             assert violations.length is 0, violations
             if validator? then validator.call(@, val) else val
 
@@ -241,7 +242,7 @@ class DataStoreModel extends SR.Data
             if value and @useCache and prop.cachedOn and (prop.opts?.cache isnt false)
                 cachedFor = (new Date() - prop.cachedOn)/1000
                 if cachedFor < @useCache
-                    @log.debug method:'get',property:property,id:@id,"returning cached value: #{value} will refresh in #{@useCache - cachedFor} seconds"
+                    @log.debug method:'get',property:property,id:@id,"returning cached value... will refresh in #{@useCache - cachedFor} seconds"
                     callback? null, value
                     return value
                 else
@@ -257,8 +258,11 @@ class DataStoreModel extends SR.Data
                         prop.cachedOn = new Date() if @useCache
                         callback? null, value
                 else
+                    @log.debug 'A'
                     x = prop.computed.apply @
+                    @log.debug x
                     value = prop.value = enforce.call @, x
+                    @log.debug value
                     callback? null, value
             catch err
                 @log.debug method:'get',property:property,id:@id,error:err, "issue during executing computed property"
@@ -270,7 +274,7 @@ class DataStoreModel extends SR.Data
             @log.debug "issuing get on static property: %s", property
             prop.value = enforce.call(@, prop?.value) if @store.isReady
             value = prop.value
-            @log.debug method:'get',property:property,id:@id,"issuing get on #{property} with #{value}"
+            @log.debug method:'get',property:property,id:@id,"issuing get on #{property}"
             callback? null, value
             value
 
@@ -402,8 +406,8 @@ class DataStoreModel extends SR.Data
 
         # getting properties performs validations on this model
         @getProperties (err,props) =>
-            unless props?
-                @log.error method:'save',id:@id,'failed to retrieve validated properties before committing to store'
+            if err?
+                @log.error method:'save',id:@id,error:err, 'failed to retrieve validated properties before committing to store'
                 return callback 'save failed to retrieve updated properties!'
 
             @log.debug method:'save',record:@name,id:@id, "saving record"
@@ -661,7 +665,7 @@ class DataStore extends EventEmitter
         entity.registry.once 'ready', -> @on event, (entry) -> process.nextTick -> callback entry
 
     createRecord: (type, data) ->
-        @log.debug method:"createRecord", type: type, data: data
+        @log.debug method:"createRecord", type: type
         try
             entity = @entities[type]
             record = new entity.model data,store:entity.container,log:@log,useCache:entity.cache
