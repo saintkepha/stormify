@@ -258,11 +258,8 @@ class DataStoreModel extends SR.Data
                         prop.cachedOn = new Date() if @useCache
                         callback? null, value
                 else
-                    @log.debug 'A'
                     x = prop.computed.apply @
-                    @log.debug x
                     value = prop.value = enforce.call @, x
-                    @log.debug value
                     callback? null, value
             catch err
                 @log.debug method:'get',property:property,id:@id,error:err, "issue during executing computed property"
@@ -609,10 +606,13 @@ class DataStore extends EventEmitter
                 if entity.static?
                     entity.registry.once 'ready', =>
                         @log.info collection:collection, 'loading static records for %s', collection
+                        count = 0
                         for entry in entity.static
                             entry.saved = true
-                            entity.registry.add entry.id, entry
-                        @log.info collection:collection, "autoloaded #{entity.static.length} static records"
+                            if entity.persist is false or not entity.registry.get(entity.id)?
+                                entity.registry.add entry.id, entry
+                                count++
+                        @log.info collection:collection, "autoloaded #{count}/#{entity.static.length} static records"
 
         # setup any authorizer reference to this store
         if @authorizer instanceof DataStore

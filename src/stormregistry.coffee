@@ -74,7 +74,7 @@ class StormRegistry extends EventEmitter
         entry
 
     get: (key) ->
-        return unless key?
+        return unless key? and @entries.hasOwnProperty(key)
         @entries[key]
 
     remove: (key) ->
