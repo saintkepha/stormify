@@ -363,7 +363,7 @@ class DataStoreModel extends SR.Data
 
     # deal with DIRT properties
     dirtyProperties: -> (prop for prop, data of @properties when data.isDirty)
-    clearDirty: -> data.isDirty = false for prop, data of @dirtyProperties()
+    clearDirty: -> data.isDirty = false for prop, data of @properties
     isDirty: (properties) ->
         dirty = @dirtyProperties()
         return (dirty.length > 0) unless properties?
@@ -662,7 +662,8 @@ class DataStore extends EventEmitter
     when: (collection, event, callback) ->
         entity = @contains collection
         assert entity? and entity.registry? and event in ['added','updated','removed'] and callback?, "must specify valid collection with event and callback to be notified"
-        entity.registry.once 'ready', -> @on event, (entry) -> process.nextTick -> callback entry
+        _store = @
+        entity.registry.once 'ready', -> @on event, (args...) -> process.nextTick -> callback.apply _store, args
 
     createRecord: (type, data) ->
         @log.debug method:"createRecord", type: type
