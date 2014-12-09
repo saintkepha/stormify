@@ -78,6 +78,7 @@ class DataStoreModel extends SR.Data
     @computedHistory = (model, opts) -> mode: 3, model: model, opts: opts
 
     @schema =
+        id:         @attr 'any', defaultValue: -> (require 'node-uuid').v4()
         createdOn:  @attr 'date'
         modifiedOn: @attr 'date'
         accessedOn: @attr 'date'
@@ -85,7 +86,6 @@ class DataStoreModel extends SR.Data
 
     async = require 'async'
     extend = require('util')._extend
-    uuid  = require 'node-uuid'
 
     schema: {}  # defined by sub-class
     store: null # auto-set by DataStore during createRecord
@@ -96,7 +96,6 @@ class DataStoreModel extends SR.Data
         @store = opts?.store
         @log = opts?.log?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
-        @log.debug id:data.id, "constructing #{@name}"
 
         @useCache = opts?.useCache
 
@@ -115,11 +114,10 @@ class DataStoreModel extends SR.Data
                 model: val.model
             } if val.model?
 
-        @id = data?.id
-        @id ?= uuid.v4()
         @version ?= 1
 
         @setProperties data
+        @id = @get('id')
 
         # verify basic schema compliance during construction
         violations = []
@@ -351,7 +349,9 @@ class DataStoreModel extends SR.Data
 
         @ # make it chainable
 
-    setProperties: (obj) -> @set property, value for property, value of obj
+    setProperties: (obj) ->
+        return unless obj instanceof Object
+        @set property, value for property, value of obj
 
     update: (data) ->
         assert @isDestroyed is false, "attempting to update a destroyed record"
