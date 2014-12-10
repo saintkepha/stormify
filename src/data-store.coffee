@@ -411,6 +411,10 @@ class DataStoreModel extends SR.Data
             try
                 @store?.commit @
                 @clearDirty()
+            catch err
+                @log.warn method:'save',record:@name,id:@id,error:err,'issue during commit record to the store, ignoring...'
+
+            try
                 @controller?.afterSave?()
                 @isSaved = true
 
@@ -421,7 +425,7 @@ class DataStoreModel extends SR.Data
                 # we self-destruct only if this record wasn't saved previously
                 @destroy() unless @isSaved is true
 
-                @log.warn method:'save',error:err,'after self destruction...'
+                @log.warn method:'save',record:@name,id:@id,error:err,'after self destruction...'
 
                 callback? err
                 throw err
