@@ -431,8 +431,11 @@ class DataStoreModel extends SR.Data
 
     # a method to invoke an action on the controller for the record
     invoke: (action, params, data) ->
-        new (require 'promise') (resolve) =>
-            resolve @controller?.actions[action]?.call(@controller, params, data)
+        new (require 'promise') (resolve,reject) =>
+            try
+                resolve @controller?.actions[action]?.call(@controller, params, data)
+            catch err
+                reject err
 
     destroy: (callback) ->
         # if controller associated, issue the destroy action call
