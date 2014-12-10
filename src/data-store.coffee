@@ -798,9 +798,10 @@ class DataStore extends EventEmitter
                 delete record.changed
                 'updated'
 
-        # may be high traffic events, should listen only sparingly
-        @emit 'commit', [ action, record.name, record.id ]
-        @log.info method:"commit", id:record.id, "#{action} '%s' on the store registry", record.constructor.name
+        if action?
+            # may be high traffic events, should listen only sparingly
+            @emit 'commit', [ action, record.name, record.id ]
+            @log.info method:"commit", id:record.id, "#{action} '%s' on the store registry", record.constructor.name
 
     #------------------------------------
     # useful for some debugging cases...
