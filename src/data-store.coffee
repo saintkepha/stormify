@@ -405,7 +405,7 @@ class DataStoreModel extends SR.Data
         @getProperties (err,props) =>
             if err?
                 @log.error method:'save',id:@id,error:err, 'failed to retrieve validated properties before committing to store'
-                return callback 'save failed to retrieve updated properties!'
+                return callback err
 
             @log.debug method:'save',record:@name,id:@id, "saving record"
             try
@@ -424,8 +424,6 @@ class DataStoreModel extends SR.Data
 
                 # we self-destruct only if this record wasn't saved previously
                 @destroy() unless @isSaved is true
-
-                @log.warn method:'save',record:@name,id:@id,error:err,'after self destruction...'
 
                 callback? err
                 throw err
