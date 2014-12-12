@@ -137,6 +137,9 @@ getter = (store,type) -> (req,res,next) ->
                     o
             store.log?.info query:condition, matches:matches.length, "getter for '%s' was successful",type
             store.log?.debug query:condition, result:res.locals.result, 'getter results for %s',type
+
+            # do NOT cache this response from getter!
+            res.setHeader 'Expires','-1'
             next()
     catch err
         return res.status(500).send error:
