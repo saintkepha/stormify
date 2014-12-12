@@ -614,7 +614,7 @@ class DataStore extends EventEmitter
                         count = 0
                         for entry in entity.static
                             entry.saved = true
-                            if entity.persist is false or not entity.registry.get(entity.id)?
+                            if entity.persist is false or not entity.registry.get(entry.id)?
                                 entity.registry.add entry.id, entry
                                 count++
                         @log.info collection:collection, "autoloaded #{count}/#{entity.static.length} static records"
