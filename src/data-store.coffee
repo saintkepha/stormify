@@ -781,7 +781,7 @@ class DataStore extends EventEmitter
     commit: (record) ->
         return unless record instanceof DataStoreModel
 
-        @log.debug method:"commit", record: record
+        @log.debug method:"commit", record: record?.id
 
         registry = @entities[record.name]?.registry
         assert registry?, "cannot commit '#{record.name}' into store which doesn't contain the collection"
