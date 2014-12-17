@@ -137,6 +137,9 @@ getter = (store,type) -> (req,res,next) ->
                     o
             store.log?.info query:condition, matches:matches.length, "getter for '%s' was successful",type
             store.log?.debug query:condition, result:res.locals.result, 'getter results for %s',type
+
+            # do NOT cache this response from getter!
+            res.setHeader 'Expires','-1'
             next()
     catch err
         return res.status(500).send error:
@@ -214,7 +217,8 @@ module.exports.serve = (store,opts) ->
 
         if entity.serve?
             entity.serve.call @, opts
-            store.log?.info method:"serve", "serving custom REST endpoint(s) for: #{collection}"
+            store.log?.info method:"serve",
+                "serving custom REST endpoint(s) for: #{collection}"
             continue if entity.serveOverride
 
         name = entity.name
@@ -226,6 +230,20 @@ module.exports.serve = (store,opts) ->
             @put  "#{baseUrl}/#{collection}/:id", authorizer(store), putter(store,name), -> @send @res.locals.result
             @del  "#{baseUrl}/#{collection}/:id", authorizer(store),remover(store,name), -> @res.status(204).send()
 
-        store.log?.info method:"serve", "auto-generated REST endpoints at: #{baseUrl}/#{collection}"
+            # attach controller actions to the REST endpoint
+            for action of entity.controller?::actions
+                do (action) =>
+                    store.log?.info method: "serve",
+                        "exposing actions: #{baseUrl}/#{collection}/:id/#{action}"
+                    @post "#{baseUrl}/#{collection}/:id/#{action}", authorizer(store), getter(store,name), ->
+                        record = @res.locals.matches[0] # only assume ONE
+                        record.invoke action, @req.query, @req.body
+                        .then(
+                            (response) => @send response
+                            (error) => @res.status(500).send error: error
+                        )
+
+        store.log?.info method:"serve",
+            "auto-generated REST endpoints at: #{baseUrl}/#{collection}"
 
     # open up a socket.io connection stream for store updates

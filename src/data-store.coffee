@@ -60,6 +60,13 @@ class DataStoreRegistry extends SR
 
         super id
 
+    # this overrides parent registry.update call to suppress event
+    # emit and instead provide additional details (changed properties) with the event
+    update: (key, entry, suppress) ->
+        super key, entry, true # force suppressing event
+        @emit 'updated', entry, entry.dirtyProperties() unless suppress is true
+        entry
+
 #---------------------------------------------------------------------------------------------------------
 
 class DataStoreModel extends SR.Data
@@ -71,6 +78,7 @@ class DataStoreModel extends SR.Data
     @computedHistory = (model, opts) -> mode: 3, model: model, opts: opts
 
     @schema =
+        id:         @attr 'any', defaultValue: -> (require 'node-uuid').v4()
         createdOn:  @attr 'date'
         modifiedOn: @attr 'date'
         accessedOn: @attr 'date'
@@ -78,7 +86,6 @@ class DataStoreModel extends SR.Data
 
     async = require 'async'
     extend = require('util')._extend
-    uuid  = require 'node-uuid'
 
     schema: {}  # defined by sub-class
     store: null # auto-set by DataStore during createRecord
@@ -89,7 +96,6 @@ class DataStoreModel extends SR.Data
         @store = opts?.store
         @log = opts?.log?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
-        @log.debug data:data, "constructing #{@name}"
 
         @useCache = opts?.useCache
 
@@ -108,18 +114,17 @@ class DataStoreModel extends SR.Data
                 model: val.model
             } if val.model?
 
-        @id = data?.id
-        @id ?= uuid.v4()
         @version ?= 1
 
         @setProperties data
+        @id = @get('id')
 
         # verify basic schema compliance during construction
         violations = []
         for name,prop of @properties
             #console.log name
             prop.value ?= switch
-                when typeof prop.opts?.defaultValue is 'function' then prop.opts.defaultValue()
+                when typeof prop.opts?.defaultValue is 'function' then prop.opts.defaultValue.call @
                 else prop.opts?.defaultValue
             unless prop.value
                 violations.push "'#{name}' is required for #{@constructor.name}" if prop.opts?.required
@@ -144,6 +149,9 @@ class DataStoreModel extends SR.Data
 
         @log.debug "done constructing #{@name}"
         assert violations.length == 0, violations
+
+    typeOf:     (property) -> @properties[property]?.type
+    instanceOf: (property) -> @properties[property]?.model
 
     # customize how data gets saved into DataStoreRegistry
     # this operation cannot be async, it means it will extract only known current values.
@@ -184,10 +192,10 @@ class DataStoreModel extends SR.Data
         enforce = (x) ->
             return x unless enforceCheck
 
-            @log.debug "checking #{property} with #{x}"
+            @log.debug "checking #{property} with '#{x}'"
 
             x ?= switch
-                when typeof prop.opts?.defaultValue is 'function' then prop.opts.defaultValue()
+                when typeof prop.opts?.defaultValue is 'function' then prop.opts.defaultValue.call @
                 else prop.opts?.defaultValue
 
             violations = []
@@ -203,7 +211,8 @@ class DataStoreModel extends SR.Data
                         when 1 then x
                         when 2 then [ x ]
                 when prop.model? and x instanceof Array and prop.mode is 2
-                    results = (@store.findRecord(prop.model,id) for id in prop.value unless id instanceof DataStoreModel).filter (e) -> e?
+                    uniqueKeys = (entry?.id ? entry for entry in x).unique()
+                    results = (@store.findRecord(prop.model,id) for id in uniqueKeys).filter (e) -> e?
                     if results.length then results else x
                 when prop.model? and x instanceof DataStoreModel
                     switch prop.mode
@@ -219,8 +228,9 @@ class DataStoreModel extends SR.Data
                         when 1 then record
                         when 2 then [ record ]
                         when 3 then null # null for now
-                when x instanceof Array and prop.opts.unique then x.unique()
+                when x instanceof Array and prop.opts?.unique then x.unique()
                 else x
+
             assert violations.length is 0, violations
             if validator? then validator.call(@, val) else val
 
@@ -231,7 +241,7 @@ class DataStoreModel extends SR.Data
             if value and @useCache and prop.cachedOn and (prop.opts?.cache isnt false)
                 cachedFor = (new Date() - prop.cachedOn)/1000
                 if cachedFor < @useCache
-                    @log.debug method:'get',property:property,id:@id,"returning cached value: #{value} will refresh in #{@useCache - cachedFor} seconds"
+                    @log.debug method:'get',property:property,id:@id,"returning cached value... will refresh in #{@useCache - cachedFor} seconds"
                     callback? null, value
                     return value
                 else
@@ -260,7 +270,7 @@ class DataStoreModel extends SR.Data
             @log.debug "issuing get on static property: %s", property
             prop.value = enforce.call(@, prop?.value) if @store.isReady
             value = prop.value
-            @log.debug method:'get',property:property,id:@id,"issuing get on #{property} with #{value}"
+            @log.debug method:'get',property:property,id:@id,"issuing get on #{property}"
             callback? null, value
             value
 
@@ -340,7 +350,9 @@ class DataStoreModel extends SR.Data
 
         @ # make it chainable
 
-    setProperties: (obj) -> @set property, value for property, value of obj
+    setProperties: (obj) ->
+        return unless obj instanceof Object
+        @set property, value for property, value of obj
 
     update: (data) ->
         assert @isDestroyed is false, "attempting to update a destroyed record"
@@ -352,7 +364,7 @@ class DataStoreModel extends SR.Data
 
     # deal with DIRT properties
     dirtyProperties: -> (prop for prop, data of @properties when data.isDirty)
-    clearDirty: -> data.isDirty = false for prop, data of @dirtyProperties()
+    clearDirty: -> data.isDirty = false for prop, data of @properties
     isDirty: (properties) ->
         dirty = @dirtyProperties()
         return (dirty.length > 0) unless properties?
@@ -375,14 +387,6 @@ class DataStoreModel extends SR.Data
 
         @save() if @isSaved is true and isSaveAfter is true and @isDirty()
 
-    # specifying 'callback' has special significance
-    #
-    # when 'callback' is passed in, it indicates that the caller is the original CREATOR
-    # of this record and would handle the case where this record is NOT yet saved
-    #
-    # this means that when it is called without callback and the record is NOT yet saved
-    # no operation will take place!
-    #
     save: (callback) ->
         assert @isDestroyed is false, "attempting to save a destroyed record"
 
@@ -400,14 +404,18 @@ class DataStoreModel extends SR.Data
 
         # getting properties performs validations on this model
         @getProperties (err,props) =>
-            unless props?
-                @log.error method:'save',id:@id,'failed to retrieve validated properties before committing to store'
-                return callback 'save failed to retrieve updated properties!'
+            if err?
+                @log.error method:'save',id:@id,error:err, 'failed to retrieve validated properties before committing to store'
+                return callback err
 
             @log.debug method:'save',record:@name,id:@id, "saving record"
             try
                 @store?.commit @
                 @clearDirty()
+            catch err
+                @log.warn method:'save',record:@name,id:@id,error:err,'issue during commit record to the store, ignoring...'
+
+            try
                 @controller?.afterSave?()
                 @isSaved = true
 
@@ -418,13 +426,19 @@ class DataStoreModel extends SR.Data
                 # we self-destruct only if this record wasn't saved previously
                 @destroy() unless @isSaved is true
 
-                @log.warn method:'save',error:err,'after self destruction...'
-
                 callback? err
                 throw err
 
             finally
                 @isSaving = false
+
+    # a method to invoke an action on the controller for the record
+    invoke: (action, params, data) ->
+        new (require 'promise') (resolve,reject) =>
+            try
+                resolve @controller?.actions[action]?.call(@controller, params, data)
+            catch err
+                reject err
 
     destroy: (callback) ->
         # if controller associated, issue the destroy action call
@@ -444,6 +458,8 @@ class DataStoreModel extends SR.Data
 EventEmitter = require('events').EventEmitter
 
 class DataStoreController extends EventEmitter
+
+    actions: {} # to be subclassed by controllers
 
     constructor: (opts) ->
         assert opts? and opts.model instanceof DataStoreModel, "unable to create an instance of DS.Controller without underlying model!"
@@ -596,10 +612,13 @@ class DataStore extends EventEmitter
                 if entity.static?
                     entity.registry.once 'ready', =>
                         @log.info collection:collection, 'loading static records for %s', collection
+                        count = 0
                         for entry in entity.static
                             entry.saved = true
-                            entity.registry.add entry.id, entry
-                        @log.info collection:collection, "autoloaded #{entity.static.length} static records"
+                            if entity.persist is false or not entity.registry.get(entry.id)?
+                                entity.registry.add entry.id, entry
+                                count++
+                        @log.info collection:collection, "autoloaded #{count}/#{entity.static.length} static records"
 
         # setup any authorizer reference to this store
         if @authorizer instanceof DataStore
@@ -649,10 +668,11 @@ class DataStore extends EventEmitter
     when: (collection, event, callback) ->
         entity = @contains collection
         assert entity? and entity.registry? and event in ['added','updated','removed'] and callback?, "must specify valid collection with event and callback to be notified"
-        entity.registry.once 'ready', -> @on event, (entry) -> process.nextTick -> callback entry
+        _store = @
+        entity.registry.once 'ready', -> @on event, (args...) -> process.nextTick -> callback.apply _store, args
 
     createRecord: (type, data) ->
-        @log.debug method:"createRecord", type: type, data: data
+        @log.debug method:"createRecord", type: type
         try
             entity = @entities[type]
             record = new entity.model data,store:entity.container,log:@log,useCache:entity.cache
@@ -761,7 +781,7 @@ class DataStore extends EventEmitter
     commit: (record) ->
         return unless record instanceof DataStoreModel
 
-        @log.debug method:"commit", record: record
+        @log.debug method:"commit", record: record?.id
 
         registry = @entities[record.name]?.registry
         assert registry?, "cannot commit '#{record.name}' into store which doesn't contain the collection"
@@ -784,9 +804,10 @@ class DataStore extends EventEmitter
                 delete record.changed
                 'updated'
 
-        # may be high traffic events, should listen only sparingly
-        @emit 'commit', [ action, record.name, record.id ]
-        @log.info method:"commit", id:record.id, "#{action} '%s' on the store registry", record.constructor.name
+        if action?
+            # may be high traffic events, should listen only sparingly
+            @emit 'commit', [ action, record.name, record.id ]
+            @log.info method:"commit", id:record.id, "#{action} '%s' on the store registry", record.constructor.name
 
     #------------------------------------
     # useful for some debugging cases...

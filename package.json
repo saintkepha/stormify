@@ -1,6 +1,6 @@
 {
   "name": "stormify",
-  "version": "0.4.5",
+  "version": "0.4.20",
   "description": "Stormify enables rapid web applications construction using ember style Data Stores",
   "author": "Peter K Lee <peter@intercloud.net>",
   "main": "lib/stormify.js",
@@ -13,7 +13,7 @@
     "prepublish": "mkdir -p lib; coffee -o lib -c src"
   },
   "devDependencies": {
-      "coffee-script": ">=1.7"
+    "coffee-script": ">=1.7"
   },
   "repository": {
     "type": "git",
@@ -31,16 +31,16 @@
   },
   "homepage": "https://github.com/stormstack/stormify",
   "dependencies": {
-    "assert": "1.1.2",
-    "async": "0.8.x",
+    "async": "0.8.0",
     "bunyan": "1.2.1",
-    "dirty": "0.9.x",
-    "json-schema": ">=0.2.0",
+    "dirty": "0.9.9",
+    "json-schema": "0.2.2",
     "node-uuid": "1.4.1",
     "passport": "0.2.1",
-    "passport-anonymous": "1.0.1"
+    "passport-anonymous": "1.0.1",
+    "promise": "^6.0.1"
   },
   "contributors": [
-      "Ravi Chunduru"
+    "Ravi Chunduru"
   ]
 }
