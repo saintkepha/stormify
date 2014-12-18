@@ -42,6 +42,7 @@ createStore = (opts) ->
     store = new opts.store
         auditor: opts.auditor
         authorizer: opts.authorizer
+        datadir:opts.datadir
 
     assert store instanceof DataStore, "unable to instantiate store as DataStore instance"
     store
