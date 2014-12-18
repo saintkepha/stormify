@@ -36,7 +36,7 @@ class DataStoreRegistry extends SR
             size = Object.keys(@entries)?.length
             @log.info entity:@entity.name,size:size,"registry for '#{@collection}' initialized with #{size} records"
 
-        datadir = opts?.datadir ? '/tmp'
+        datadir = @store.datadir ? '/tmp'
         console.log 'datadir is', datadir
         super
             log: @log
@@ -610,7 +610,7 @@ class DataStore extends EventEmitter
         @log.info method:'initialize', 'initializing a new DataStore: %s', @name
         for collection, entity of @collections
             do (collection,entity) =>
-                entity.registry ?= new DataStoreRegistry collection, log:@log,store:@,persist:entity.persist, datadir:@datadir
+                entity.registry ?= new DataStoreRegistry collection, log:@log,store:@,persist:entity.persist
                 if entity.static?
                     entity.registry.once 'ready', =>
                         @log.info collection:collection, 'loading static records for %s', collection
