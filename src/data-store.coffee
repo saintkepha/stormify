@@ -37,6 +37,7 @@ class DataStoreRegistry extends SR
             @log.info entity:@entity.name,size:size,"registry for '#{@collection}' initialized with #{size} records"
 
         datadir = opts?.datadir ? '/tmp'
+        console.log 'datadir is', datadir
         super
             log: @log
             path: "#{datadir}/#{@collection}.db" if opts?.persist
@@ -597,6 +598,7 @@ class DataStore extends EventEmitter
         @authorizer = opts?.authorizer
 
         @isReady = false
+        @datadir = opts.datadir
 
         # if @constructor.name != 'DataStore'
         #   assert Object.keys(@entities).length > 0, "cannot have a data store without declared entities!"
@@ -608,7 +610,7 @@ class DataStore extends EventEmitter
         @log.info method:'initialize', 'initializing a new DataStore: %s', @name
         for collection, entity of @collections
             do (collection,entity) =>
-                entity.registry ?= new DataStoreRegistry collection, log:@log,store:@,persist:entity.persist
+                entity.registry ?= new DataStoreRegistry collection, log:@log,store:@,persist:entity.persist, datadir:@datadir
                 if entity.static?
                     entity.registry.once 'ready', =>
                         @log.info collection:collection, 'loading static records for %s', collection
