@@ -36,11 +36,9 @@ class DataStoreRegistry extends SR
             size = Object.keys(@entries)?.length
             @log.info entity:@entity.name,size:size,"registry for '#{@collection}' initialized with #{size} records"
 
-        datadir = @store.datadir ? '/tmp'
-        console.log 'datadir is', datadir
         super
             log: @log
-            path: "#{datadir}/#{@collection}.db" if opts?.persist
+            path: "#{@store.datadir}/#{@collection}.db" if opts?.persist
 
     keys: -> Object.keys(@entries)
 
@@ -598,7 +596,7 @@ class DataStore extends EventEmitter
         @authorizer = opts?.authorizer
 
         @isReady = false
-        @datadir = opts.datadir
+        @datadir = opts?.datadir ? '/tmp'
 
         # if @constructor.name != 'DataStore'
         #   assert Object.keys(@entities).length > 0, "cannot have a data store without declared entities!"
