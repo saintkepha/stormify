@@ -191,8 +191,7 @@ class DataStoreModel extends SR.Data
         enforce = (x) ->
             return x unless enforceCheck
 
-            @log.debug "checking #{property} with '#{x}'"
-
+            @log.debug "checking #{property} with '#{x}' as #{prop.model}"
             x ?= switch
                 when typeof prop.opts?.defaultValue is 'function' then prop.opts.defaultValue.call @
                 else prop.opts?.defaultValue
@@ -201,6 +200,7 @@ class DataStoreModel extends SR.Data
             validator = prop?.opts?.validator
             val = switch
                 when not x?
+                    @log.debug "value is empty"
                     violations.push "'#{property}' is a required property for #{@name}" if prop.opts?.required
                     if prop.mode is 2 then [] else null
                 when prop.model? and typeof prop.model isnt 'string'
@@ -209,7 +209,8 @@ class DataStoreModel extends SR.Data
                     switch prop.mode
                         when 1 then x
                         when 2 then [ x ]
-                when prop.model? and x instanceof Array and prop.mode is 2
+                when prop.model? and prop.mode is 2 and x instanceof Array
+                    @log.debug "resolving hasMany"
                     unless x.length > 0 then x
                     else
                         x.map( (e) =>
@@ -218,11 +219,15 @@ class DataStoreModel extends SR.Data
                                 else @store.findRecord(prop.model,e)
                         ).filter( (e) -> e? ).unique()
                 when prop.model? and x instanceof DataStoreModel
+                    @log.debug "resolving belongsTo"
                     switch prop.mode
                         when 1 then x
                         when 2 then [ x ]
-                when prop.model? and x instanceof Object then x
+                when prop.model? and typeof x is 'object'
+                    @log.debug "should be model but just returning object #{x}"
+                    x
                 when prop.model? and prop.mode isnt 3
+                    @log.debug "attempting to resolve record with #{x}"
                     record = @store.findRecord(prop.model,x)
                     unless record?
                         violations.push "'#{property}' must be a model of #{prop.model}, unable to find using #{x}"
@@ -232,8 +237,11 @@ class DataStoreModel extends SR.Data
                             if record? then [ record ] else []
                         when 3 then null # null for now
                 when x instanceof Array and prop.opts?.unique is true
-                    x.unique().filter (e) -> e?
-                else x
+                    @log.debug "converting array to unique and defined values"
+                    x.filter( (e) -> e? ).unique()
+                else
+                    @log.debug "nothing matched..."
+                    x
 
             assert violations.length is 0, violations
             if validator? then validator.call(@, val) else val

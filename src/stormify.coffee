@@ -1,16 +1,17 @@
 assert = require 'assert'
 
 Array::unique = ->
-      output = {}
-      for key in [0..@length-1]
-        val = @[key]
-        switch
-            when typeof val is 'object' and val.id?
-                output[val.id] = val
-            else
-                output[val] = val
-      #output[@[key]] = @[key] for key in [0...@length]
-      value for key, value of output
+    return @ unless @length > 0
+    output = {}
+    for key in [0..@length-1]
+      val = @[key]
+      switch
+          when typeof val is 'object' and val.id?
+              output[val.id] = val
+          else
+              output[val] = val
+    #output[@[key]] = @[key] for key in [0...@length]
+    value for key, value of output
 
 Array::contains = (query) ->
     return false if typeof query isnt "object"
