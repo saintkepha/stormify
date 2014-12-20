@@ -2,7 +2,7 @@ assert = require 'assert'
 
 Array::unique = ->
       output = {}
-      for key in [0..@length]
+      for key in [0..@length-1]
         val = @[key]
         switch
             when typeof val is 'object' and val.id?

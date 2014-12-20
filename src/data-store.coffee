@@ -202,7 +202,7 @@ class DataStoreModel extends SR.Data
             val = switch
                 when not x?
                     violations.push "'#{property}' is a required property for #{@name}" if prop.opts?.required
-                    x
+                    if prop.mode is 2 then [] else null
                 when prop.model? and typeof prop.model isnt 'string'
                     unless x instanceof prop.model
                         violations.push "'#{property}' must be an instance of #{prop.model.prototype?.constructor?.name}"
@@ -210,26 +210,29 @@ class DataStoreModel extends SR.Data
                         when 1 then x
                         when 2 then [ x ]
                 when prop.model? and x instanceof Array and prop.mode is 2
-                    x.map( (e) =>
-                        switch
-                            when e instanceof prop.model then e
-                            else @store.findRecord(prop.model,e)
-                    ).filter( (e) -> e? ).unique()
+                    unless x.length > 0 then x
+                    else
+                        x.map( (e) =>
+                            switch
+                                when e instanceof DataStoreModel then e
+                                else @store.findRecord(prop.model,e)
+                        ).filter( (e) -> e? ).unique()
                 when prop.model? and x instanceof DataStoreModel
                     switch prop.mode
                         when 1 then x
                         when 2 then [ x ]
                 when prop.model? and x instanceof Object then x
                 when prop.model? and prop.mode isnt 3
-                    #console.log "#{prop.model} using #{x}"
                     record = @store.findRecord(prop.model,x)
                     unless record?
                         violations.push "'#{property}' must be a model of #{prop.model}, unable to find using #{x}"
                     switch prop.mode
                         when 1 then record
-                        when 2 then [ record ]
+                        when 2
+                            if record? then [ record ] else []
                         when 3 then null # null for now
-                when x instanceof Array and prop.opts?.unique then x.unique()
+                when x instanceof Array and prop.opts?.unique is true
+                    x.unique().filter (e) -> e?
                 else x
 
             assert violations.length is 0, violations
