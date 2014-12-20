@@ -6,7 +6,7 @@ Array::unique = ->
         val = @[key]
         switch
             when typeof val is 'object' and val.id?
-                output[item.id] = val
+                output[val.id] = val
             else
                 output[val] = val
       #output[@[key]] = @[key] for key in [0...@length]
