@@ -210,9 +210,11 @@ class DataStoreModel extends SR.Data
                         when 1 then x
                         when 2 then [ x ]
                 when prop.model? and x instanceof Array and prop.mode is 2
-                    uniqueKeys = (entry?.id ? entry for entry in x).unique()
-                    results = (@store.findRecord(prop.model,id) for id in uniqueKeys).filter (e) -> e?
-                    if results.length then results else x
+                    x.map( (e) =>
+                        switch
+                            when e instanceof prop.model then e
+                            else @store.findRecord(prop.model,e)
+                    ).filter( (e) -> e? ).unique()
                 when prop.model? and x instanceof DataStoreModel
                     switch prop.mode
                         when 1 then x
