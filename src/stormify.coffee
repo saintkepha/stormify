@@ -101,6 +101,7 @@ poster = (store,type) -> (req,res,next) ->
             unless err?
                 res.locals.result = record.serialize tag:true
                 store.log?.info query:req.params.id,result:res.locals.result, 'poster results for %s',type
+                res.setHeader 'Expires','-1'
                 next()
             else
                 res.status(500).send error:
@@ -171,6 +172,7 @@ putter = (store,type) -> (req,res,next) ->
             if result? and result instanceof DataStore.Model
                 res.locals.result = result.serialize tag:true
                 store.log?.info query:req.params.id,result:res.locals.result, 'putter results for %s',type
+                res.setHeader 'Expires','-1'
                 next()
             else
                 res.status(404).send()
