@@ -720,7 +720,8 @@ class DataStore extends EventEmitter
 
     # findBy returns the matching records directly (similar to findRecord)
     findBy: (type, condition, callback) ->
-        return callback "invalid findBy query params!" unless type? and typeof condition is 'object'
+        assert type? and typeof condition is 'object',
+            "DS: invalid findBy query params!"
 
         @log.info method:'findBy',type:type,condition:condition, 'issuing findBy on requested entity'
 
@@ -751,9 +752,10 @@ class DataStore extends EventEmitter
         results
 
     find: (type, query, callback) ->
-        _entity = @entities[type]
-        return callback "DS: unable to find using unsupported type: #{type}" unless _entity?
+        assert @entities.hasOwnProperty(type),
+            "DS: unable to find using unsupported type: #{type}"
 
+        _entity = @entities[type]
         ids = switch
             when query instanceof Array then query
             when query instanceof Object
