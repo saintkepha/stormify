@@ -7,16 +7,23 @@ bunyan = require 'bunyan'
 
 #---------------------------------------------------------------------------------------------------------
 
-SR = require 'stormregistry'
+SR = require './stormregistry'
 
+#-----------------------------------
+# DataStoreRegistry
+#
+# Uses deferred DataStoreModel instantiation to take place only on @get
+#
 class DataStoreRegistry extends SR
 
-    constructor: (@entity,opts) ->
-        assert entity instanceof Object and entity.model?, "cannot construct DataStoreRegistry without valid entity passed in"
-
+    constructor: (@collection,opts) ->
         @store = opts?.store
+        assert @store? and @store.contains(@collection), "cannot construct DataStoreRegistry without valid store containing '#{collection}' passed in"
+
         @log = opts?.log?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
+
+        @entity = @store.contains(@collection)
 
         @on 'load', (key,val) ->
             @log.debug entity:@entity.name,key:key,'loading a persisted record'
@@ -26,61 +33,98 @@ class DataStoreRegistry extends SR
                 entry.saved = true
                 @add key, entry
         @on 'ready', ->
-            @log.info entity:@entity.name,size:Object.keys(@entries)?.length,'registry is initialized and ready'
+            size = Object.keys(@entries)?.length
+            @log.info entity:@entity.name,size:size,"registry for '#{@collection}' initialized with #{size} records"
 
-        datadir = opts?.datadir ? '/tmp'
         super
             log: @log
-            path: "#{datadir}/#{entity.name}.db" if entity.persist
+            path: "#{@store.datadir}/#{@collection}.db" if opts?.persist
+
+    keys: -> Object.keys(@entries)
 
     get: (id) ->
         entry = super id
         return null unless entry?
         unless entry instanceof DataStoreModel
-            @update id, new @entity.model(entry, store:@store,log:@log)
+            @log.debug id:id, "restoring #{@entity.name} from registry using underlying entry"
+
+            # we try here since we don't know if we can successfully createRecord during restoration!
+            try
+                record = @store.createRecord @entity.name, entry
+                record.isSaved = true
+                @update id, record, true
+            catch err
+                @log.warn method:'get',id:id,error:err, "issue while trying to restore a record of '#{@entity.name}' from registry"
+                return null
+
         super id
+
+    # this overrides parent registry.update call to suppress event
+    # emit and instead provide additional details (changed properties) with the event
+    update: (key, entry, suppress) ->
+        super key, entry, true # force suppressing event
+        @emit 'updated', entry, entry.dirtyProperties() unless suppress is true
+        entry
 
 #---------------------------------------------------------------------------------------------------------
 
 class DataStoreModel extends SR.Data
 
+    @attr      = (type, opts)  -> type: type, opts: opts
+    @belongsTo = (model, opts) -> mode: 1, model: model, opts: opts
+    @hasMany   = (model, opts) -> mode: 2, model: model, opts: opts
+    @computed  = (func, opts)  -> computed: func, opts: opts
+    @computedHistory = (model, opts) -> mode: 3, model: model, opts: opts
+
+    @schema =
+        id:         @attr 'any', defaultValue: -> (require 'node-uuid').v4()
+        createdOn:  @attr 'date'
+        modifiedOn: @attr 'date'
+        accessedOn: @attr 'date'
+        error:      @attr 'object'
+
     async = require 'async'
     extend = require('util')._extend
-    uuid  = require 'node-uuid'
 
-    schema: null # defined by sub-class
-    store: null  # auto-set by DataStore during createRecord
+    schema: {}  # defined by sub-class
+    store: null # auto-set by DataStore during createRecord
 
     constructor: (data,opts) ->
-        @properties =
-            createdOn:  value: null
-            modifiedOn: value: null
-            accessedOn: value: null
-
-        @isSaved = false
+        @isSaving = @isSaved = @isDestroy = @isDestroyed = false
 
         @store = opts?.store
-
         @log = opts?.log?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
 
-        @log.debug data:data, "constructing #{@name}"
+        @useCache = opts?.useCache
 
-        # initialize all properties according to schema
-        for key,val of @schema when @schema?
-            do (val) =>
-                @properties[key] = extend {},val
+        # initialize all relations and properties according to schema
+        @relations = {}
+        @properties = {}
 
-        @id = data?.id
-        @id ?= uuid.v4()
+        @schema = extend @schema, DataStoreModel.schema
+
+        for key,val of @schema
+            @properties[key] = extend {},val
+            @relations[key] = {
+                type: switch val.mode
+                    when 1 then 'belongsTo'
+                    when 2 then 'hasMany'
+                model: val.model
+            } if val.model?
+
         @version ?= 1
+
         @setProperties data
+        @id = @get('id')
 
         # verify basic schema compliance during construction
         violations = []
         for name,prop of @properties
             #console.log name
-            prop.value ?= prop.opts?.defaultValue
+            prop.value ?= switch
+                when typeof prop.opts?.defaultValue is 'function' then prop.opts.defaultValue.call @
+                else prop.opts?.defaultValue
             unless prop.value
                 violations.push "'#{name}' is required for #{@constructor.name}" if prop.opts?.required
             else
@@ -105,71 +149,100 @@ class DataStoreModel extends SR.Data
         @log.debug "done constructing #{@name}"
         assert violations.length == 0, violations
 
+    typeOf:     (property) -> @properties[property]?.type
+    instanceOf: (property) -> @properties[property]?.model
+
     # customize how data gets saved into DataStoreRegistry
     # this operation cannot be async, it means it will extract only known current values.
     # but it doesn't matter since computed data will be re-computed once instantiated
-    serialize: (notag) ->
+    serialize: (opts) ->
+        assert @isDestroyed is false, "attempting to serialize a destroyed record"
+
         result = id: @id
         for prop,data of @properties when data.value?
             x = data.value
             result[prop] = switch
-                when x instanceof DataStoreModel then x.id
+                when x instanceof DataStoreModel
+                    if opts?.embedded is true
+                        x.serialize()
+                    else
+                        x.id
                 when x instanceof Array
                     (if y instanceof DataStoreModel then y.id else y) for y in x
                 else x
 
-        return result if notag
+        return result unless opts?.tag is true
 
         data = {}
         data["#{@name}"] = result
         data
 
-    get: (property, callback) ->
+    get: (property, opts..., callback) ->
         assert @properties.hasOwnProperty(property), "attempting to retrieve '#{property}' which doesn't exist in this model"
+        #assert @isDestroyed is false, "attempting to retrieve '#{property}' from a destroyed record"
 
         prop = @properties[property]
+
+        enforceCheck = if opts.length then opts[0].enforce else true
 
         # simple property options enforcement routine
         #
         # unique: true (for array types, ensures only unique entries)
         enforce = (x) ->
-            #console.log "checking #{property} with #{x}"
-            #
+            return x unless enforceCheck
+
+            @log.debug "checking #{property} with '#{x}' as #{prop.model}"
+            x ?= switch
+                when typeof prop.opts?.defaultValue is 'function' then prop.opts.defaultValue.call @
+                else prop.opts?.defaultValue
+
             violations = []
             validator = prop?.opts?.validator
             val = switch
-                when not x
-                    violations.push "'#{property}' is a required property" if prop.opts?.required
-                    null
-                when prop.model? and x instanceof Array and prop.mode is 2
-                    results = (@store.findRecord(prop.model,id) for id in prop.value unless id instanceof DataStoreModel).filter (e) -> e?
-                    if results.length then results else x
-                when prop.model? and x instanceof DataStoreModel
+                when not x?
+                    @log.debug "value is empty"
+                    violations.push "'#{property}' is a required property for #{@name}" if prop.opts?.required
+                    if prop.mode is 2 then [] else null
+                when prop.model? and typeof prop.model isnt 'string'
+                    unless x instanceof prop.model
+                        violations.push "'#{property}' must be an instance of #{prop.model.prototype?.constructor?.name}"
                     switch prop.mode
                         when 1 then x
                         when 2 then [ x ]
-                when prop.model? and x instanceof Object
-                    try
-                        inverse = prop.opts?.inverse
-                        x[inverse] = @ if inverse?
-                        record = @store.createRecord prop.model,x
-                    catch err
-                        @log.warn error:err, "attempt to auto-create #{prop.model} failed"
-                        record = x
-                    #XXX - why does record.save() hang?
-                    #record.save()
-                    record
+                when prop.model? and prop.mode is 2 and x instanceof Array
+                    @log.debug "resolving hasMany"
+                    unless x.length > 0 then x
+                    else
+                        x.map( (e) =>
+                            switch
+                                when e instanceof DataStoreModel then e
+                                else @store.findRecord(prop.model,e)
+                        ).filter( (e) -> e? ).unique()
+                when prop.model? and x instanceof DataStoreModel
+                    @log.debug "resolving belongsTo"
+                    switch prop.mode
+                        when 1 then x
+                        when 2 then [ x ]
+                when prop.model? and typeof x is 'object'
+                    @log.debug "should be model but just returning object #{x}"
+                    x
                 when prop.model? and prop.mode isnt 3
-                    #console.log "#{prop.model} using #{x}"
+                    @log.debug "attempting to resolve record with #{x}"
                     record = @store.findRecord(prop.model,x)
                     unless record?
                         violations.push "'#{property}' must be a model of #{prop.model}, unable to find using #{x}"
                     switch prop.mode
                         when 1 then record
-                        when 2 then [ record ]
+                        when 2
+                            if record? then [ record ] else []
                         when 3 then null # null for now
-                when x instanceof Array and prop.opts.unique then x.unique()
-                else x
+                when x instanceof Array and prop.opts?.unique is true
+                    @log.debug "converting array to unique and defined values"
+                    x.filter( (e) -> e? ).unique()
+                else
+                    @log.debug "nothing matched..."
+                    x
+
             assert violations.length is 0, violations
             if validator? then validator.call(@, val) else val
 
@@ -180,31 +253,36 @@ class DataStoreModel extends SR.Data
             if value and @useCache and prop.cachedOn and (prop.opts?.cache isnt false)
                 cachedFor = (new Date() - prop.cachedOn)/1000
                 if cachedFor < @useCache
-                    @log.info method:'get',property:property,id:@id,"returning cached value: #{value} will refresh in #{@useCache - cachedFor} seconds"
+                    @log.debug method:'get',property:property,id:@id,"returning cached value... will refresh in #{@useCache - cachedFor} seconds"
                     callback? null, value
                     return value
                 else
                     @log.info method:'get',property:property,id:@id, "re-computing expired cached property (#{cachedFor} secs > #{@useCache} secs)"
 
             @log.debug method:'get',property:property,id:@id,"computing a new value!"
-            cacheComputed = (err, value) =>
-                unless err and @useCache
-                    prop.value = value
-                    prop.cachedOn = new Date()
-                callback? err, enforce.call(@,value)
 
-            if prop.opts?.async
-                prop.computed.apply @, [cacheComputed,prop]
-            else
-                prop.value = prop.computed.apply @
-                callback? null, enforce.call @, prop.value
+            try
+                if prop.opts?.async
+                    prop.computed.call @, (err, value) =>
+                        return callback? err, value if err?
+                        value = prop.value = enforce.call @, value
+                        prop.cachedOn = new Date() if @useCache
+                        callback? null, value
+                else
+                    x = prop.computed.apply @
+                    value = prop.value = enforce.call @, x
+                    callback? null, value
+            catch err
+                @log.debug method:'get',property:property,id:@id,error:err, "issue during executing computed property"
+                callback? err
+                return value
 
             value # this is to avoid returning a function when direct 'get' is invoked
         else
-            @log.info "issuing get on static property: %s", property
+            @log.debug "issuing get on static property: %s", property
             prop.value = enforce.call(@, prop?.value) if @store.isReady
             value = prop.value
-            @log.debug method:'get',property:property,id:@id,"issuing get on #{property} with #{value}"
+            @log.debug method:'get',property:property,id:@id,"issuing get on #{property}"
             callback? null, value
             value
 
@@ -221,11 +299,14 @@ class DataStoreModel extends SR.Data
         for property, value of props
             if typeof value.computed is 'function'
                 do (property) ->
-                    self.log.info "scheduling task for computed property: #{property}..."
+                    self.log.debug "scheduling task for computed property: #{property}..."
                     tasks[property] = (callback) -> self.get property, callback
+                    self.log.debug "completed task for computed property: #{property}..."
 
         start = new Date()
         async.parallel tasks, (err, results) =>
+            return callback err if err?
+
             results.id = @id
             @log.trace method:'getProperties',id:@id,results:results, 'computed properties'
             statics = {}
@@ -241,14 +322,15 @@ class DataStoreModel extends SR.Data
                 numComputed: Object.keys(tasks).length
                 id: @id
                 computed: Object.keys(tasks)
-                results: results
                 "processing properties took #{duration} ms exceeding threshold!") if duration > 1000
 
-            @log.debug method:'getProperties',id:@id,results:results, 'final results before callback'
-            callback results
+            @log.debug method:'getProperties',id:@id,results:Object.keys(results), 'final results before callback'
+            callback null, results
 
     set: (property, opts..., value) ->
-        return if @schema? and not @properties.hasOwnProperty(property)
+        assert @isDestroyed is false, "attempting to set a value to a destroyed record"
+
+        return @ if @schema? and not @properties.hasOwnProperty(property)
 
         if typeof value is 'function'
             if property instanceof Array
@@ -268,22 +350,33 @@ class DataStoreModel extends SR.Data
             @log.debug method:'set',property:property,id:@id,"compared #{property} #{cval} with #{nval}... isDirty:#{isDirty}"
             setting = isDirty:isDirty,lvalue:cval,value:nval
             if @properties.hasOwnProperty(property)
+                if @properties[property].opts?.required
+                    assert value?, "must set value for required property '#{property}'"
+
                 @properties[property] = extend @properties[property], setting
             else
                 @properties[property] = setting
+
         # now apply opts into the property if applicable
         #@properties[property].opts = opts if opts?
 
-    setProperties: (obj) -> @set property, value for property, value of obj
+        @ # make it chainable
+
+    setProperties: (obj) ->
+        return unless obj instanceof Object
+        @set property, value for property, value of obj
 
     update: (data) ->
-        @setProperties data
+        assert @isDestroyed is false, "attempting to update a destroyed record"
+
         # if controller associated, issue the updateRecord action call
-        @controller?.update data if @store.isReady
+        @controller?.beforeUpdate? data
+        @setProperties data
+        @controller?.afterUpdate? data
 
     # deal with DIRT properties
     dirtyProperties: -> (prop for prop, data of @properties when data.isDirty)
-    clearDirty: -> data.isDirty = false for prop, data of @dirtyProperties()
+    clearDirty: -> data.isDirty = false for prop, data of @properties
     isDirty: (properties) ->
         dirty = @dirtyProperties()
         return (dirty.length > 0) unless properties?
@@ -291,29 +384,86 @@ class DataStoreModel extends SR.Data
         dirty = dirty.join ' '
         properties.some (prop) -> ~dirty.indexOf prop
 
+    removeReferences: (model,isSaveAfter) ->
+        return unless model instanceof DataStoreModel
+        changes = 0
+        for key, relation of @relations
+            continue unless relation.model is model.name
+            @log.debug method:'removeReferences',id:@id,"clearing #{key}.#{relation.type} '#{relation.model}' containing #{model.id}..."
+            try
+                switch relation.type
+                    when 'belongsTo' then @set key, null if @get(key)?.id is model.id
+                    when 'hasMany'   then @set key, @get(key).without id:model.id
+            catch err
+                @log.debug method:'removeReferences', error:err, "issue encountered while attempting to clear #{@name}.#{key} where #{relation.model}=#{model.id}"
+
+        @save() if @isSaved is true and isSaveAfter is true and @isDirty()
+
     save: (callback) ->
-        state = switch
-            when not @isSaved then 'new'
-            when @isDirty() then 'changed'
-            else 'unchanged'
-        @log.info method:'save',id:@id, "saving a %s record", state
-        if @isDirty() or not @isSaved
-            @getProperties (props) =>
-                unless props?
-                    @log.error method:'save',id:@id,'failed to retrieve properties following save!'
-                    callback? 'save failed to retrieve updated properties!', null
-                else
-                    @store?.commit @
-                    @clearDirty()
-                    @isSaved = true
-                    callback? null, @
+        assert @isDestroyed is false, "attempting to save a destroyed record"
+
+        if @isSaving is true
+            return callback? null, @
+
+        @isSaving = true
+        try
+            @controller?.beforeSave?()
+        catch err
+            @log.error method:'save',record:@name,id:@id,error:err,'failed to satisfy beforeSave controller hook'
+            @isSaving = false
+            callback? err
+            throw err
+
+        # getting properties performs validations on this model
+        @getProperties (err,props) =>
+            if err?
+                @log.error method:'save',id:@id,error:err, 'failed to retrieve validated properties before committing to store'
+                return callback err
+
+            @log.debug method:'save',record:@name,id:@id, "saving record"
+            try
+                @store?.commit @
+                @clearDirty()
+            catch err
+                @log.warn method:'save',record:@name,id:@id,error:err,'issue during commit record to the store, ignoring...'
+
+            try
+                @controller?.afterSave?()
+                @isSaved = true
+
+                callback? null, @, props
+            catch err
+                @log.error method:'save',record:@name,id:@id,error:err,'failed to commit record to the store!'
+
+                # we self-destruct only if this record wasn't saved previously
+                @destroy() unless @isSaved is true
+
+                callback? err
+                throw err
+
+            finally
+                @isSaving = false
+
+    # a method to invoke an action on the controller for the record
+    invoke: (action, params, data) ->
+        new (require 'promise') (resolve,reject) =>
+            try
+                resolve @controller?.actions[action]?.call(@controller, params, data)
+            catch err
+                reject err
 
     destroy: (callback) ->
         # if controller associated, issue the destroy action call
-        @controller?.destroy data if @store.isReady
-
-        @store?.commit @, true
-        callback null, true
+        @isDestroy = true
+        try
+            @controller?.beforeDestroy?()
+            @store?.commit @
+            @isDestroyed = true
+            @controller?.afterDestroy?()
+        catch err
+            @log.warn method:'destroy',record:@name,id:@id,error:err,'encountered issues during destroy, ignoring...'
+        finally
+            callback? null, true
 
 #---------------------------------------------------------------------------------------------------------
 
@@ -321,182 +471,315 @@ EventEmitter = require('events').EventEmitter
 
 class DataStoreController extends EventEmitter
 
-    constructor: (@model,opts) ->
-        assert model instanceof DataStoreModel, "unable to create an instance of DS.Controller without underlying model!"
+    actions: {} # to be subclassed by controllers
 
-        model.controller ?= this
+    constructor: (opts) ->
+        assert opts? and opts.model instanceof DataStoreModel, "unable to create an instance of DS.Controller without underlying model!"
 
-        @store = model.store
-        @create opts?.data if @store.isReady
+        # XXX - may change to check for instanceof DataStoreView in the future
+        #assert opts? and opts.view  instanceof DataStoreView, "unable to create an instance of DS.Controller without a proper view!"
 
-    create: (data) ->
-        @model.set 'createdOn', new Date()
+        @model = opts.model
+        @store = @view  = opts.view # hack for now to preserve existing controller behavior
+
+        @log = opts.log?.child class: @constructor.name
+        @log ?= new bunyan name: @constructor.name
+
+    beforeUpdate: (data) ->
+        @emit 'beforeUpdate', [ @model.name, @model.id ]
+
+    afterUpdate: (data) ->
         @model.set 'modifiedOn', new Date()
-        @model.set 'accessedOn', new Date()
+        @emit 'afterUpdate', [ @model.name, @model.id ]
 
-        @emit 'createRecord', [ @model.name, @model.id ]
+    beforeSave: ->
+        @emit 'beforeSave', [ @model.name, @model.id ]
 
-    update: (data) ->
-        @model.set 'modifiedOn', new Date()
+        @log.trace method:'beforeSave', 'we should auto resolve belongsTo and hasMany here...'
 
-        @emit 'updateRecord', [ @model,name, @model.id ]
+        createdOn = @model.get 'createdOn'
+        unless createdOn?
+            @model.set 'createdOn', new Date()
+            @model.set 'modifiedOn', new Date()
+            @model.set 'accessedOn', new Date()
 
-    destroy: (data) ->
+        # when prop.model? and x instanceof Object
+        #     try
+        #         inverse = prop.opts?.inverse
+        #         x[inverse] = @ if inverse?
+        #         record = @store.createRecord prop.model,x
+        #         record.save()
+        #     catch err
+        #         @log.warn error:err, "attempt to auto-create #{prop.model} failed"
+        #         record = x
+        #     #XXX - why does record.save() hang?
+        #     record
 
-        @emit 'destroyRecord', [ @model.name, @model.id ]
+    afterSave: ->
+        @emit 'afterSave', [ @model.name, @model.id ]
+
+    beforeDestroy: ->
+        @emit 'beforeDestroy', [ @model.name, @model.id ]
+
+    afterDestroy: ->
+        @log.info method:'afterDestroy', model:@model.name, id:@model.id, 'invoking afterDestroy to remove external references to this model'
+        # go through all model relations and remove reference back to the @model
+        for key,relation of @model.relations
+            @log.debug method:'afterDestroy',key:key,relation:relation,"checking #{key}.#{relation.type} '#{relation.model}'"
+            try
+                switch relation.type
+                    when 'belongsTo' then @model.get(key)?.removeReferences? @model, true
+                    when 'hasMany'   then target?.removeReferences? @model, true for target in @model.get(key)
+            catch err
+                @log.debug method:'afterDestroy',key:key,relation:relation,"ignoring relation to '#{key}' that cannot be resolved"
+
+        @emit 'afterDestroy', [ @model.name, @model.id ]
 
 #---------------------------------------------------------------------------------------------------------
 
-class DataStore
+# Wrapper around underlying DataStore
+#
+# Used during store.open(requestor) in order to provide access context
+# for store operations. Also, DataStore sub-classes can override the
+# store.open call to manipulate the views into the underlying entities
+class DataStoreView
+
+    extend = require('util')._extend
+
+    constructor: (@store, @requestor) ->
+        assert store instanceof DataStore, "cannot provide View without valid DataStore"
+        @entities = extend {}, @store.entities
+        @log = @store.log?.child class: @constructor.name
+        @log ?= new bunyan name: @constructor.name
+
+        #@transactions = []
+
+    createRecord: (args...) ->
+        record = @store.createRecord.apply @, args
+        #@transactions.push create:record
+        record
+
+    deleteRecord: (args...) -> @store.deleteRecord.apply @, args
+    updateRecord: (args...) -> @store.updateRecord.apply @, args
+    findRecord:   (args...) -> @store.findRecord.apply @, args
+    findBy:       (args...) -> @store.findBy.apply @, args
+    find:         (args...) -> @store.find.apply @, args
+
+#---------------------------------------------------------------------------------------------------------
+
+class DataStore extends EventEmitter
+
+    # various extensions available from this class object
+    @Model      = DataStoreModel
+    @Controller = DataStoreController
+    @View       = DataStoreView
+    @Registry   = DataStoreRegistry
+
+    @attr       = @Model.attr
+    @belongsTo  = @Model.belongsTo
+    @hasMany    = @Model.hasMany
+    @computed   = @Model.computed
+    @computedHistory = @Model.computedHistory
 
     async = require 'async'
     uuid  = require 'node-uuid'
     extend = require('util')._extend
 
+    name: null # must be set by sub-class
+
     adapters: {}
-    adapter: (type, module) -> @adapters[type] = module
+    adapter: (type, module) -> @adapters[type] = module if type? and module?
     using: (adapter) -> @adapters[adapter]
 
+    # stores: {}
+    # link: (store) -> @stores[store.name] = store if store?
+
     constructor: (opts) ->
+        @name ?= opts?.name
+
+        assert @name?, "cannot construct DataStore without naming this store!"
+
         @log = opts?.auditor?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
 
-        @authorizer = opts?.authorizer
-
-        @entities = {}
+        @collections = {} # the name of collection mapping to entity
+        @entities = {}    # the name of entity mapping to entity object
         @entities = extend(@entities, opts.entities) if opts?.entities?
 
+        @authorizer = opts?.authorizer
+
         @isReady = false
+        @datadir = opts?.datadir ? '/tmp'
 
         # if @constructor.name != 'DataStore'
         #   assert Object.keys(@entities).length > 0, "cannot have a data store without declared entities!"
 
     initialize: ->
         return if @isReady
-        for collection, entity of @entities
-            entity.registry = new DataStoreRegistry entity,log:@log,store:@
-            if entity.static?
-                created = 0
-                for entry in entity.static
-                    do (entry) =>
-                        record = @createRecord(entity.name, entry)
-                        assert record?, "#{entry} failed to be created!"
-                        record?.save()
-                        created++ if record?
-                assert created is entity.static.length, "failed to create all the static records!"
-                @log.info collection:collection, "autoloaded #{entity.static.length} static records"
-        @isReady = true
 
+        console.log "initializing a new DataStore: #{@name}"
+        @log.info method:'initialize', 'initializing a new DataStore: %s', @name
+        for collection, entity of @collections
+            do (collection,entity) =>
+                entity.registry ?= new DataStoreRegistry collection, log:@log,store:@,persist:entity.persist
+                if entity.static?
+                    entity.registry.once 'ready', =>
+                        @log.info collection:collection, 'loading static records for %s', collection
+                        count = 0
+                        for entry in entity.static
+                            entry.saved = true
+                            if entity.persist is false or not entity.registry.get(entry.id)?
+                                entity.registry.add entry.id, entry
+                                count++
+                        @log.info collection:collection, "autoloaded #{count}/#{entity.static.length} static records"
+
+        # setup any authorizer reference to this store
+        if @authorizer instanceof DataStore
+            @references @authorizer.contains 'identities'
+            @authorizer.references @contains 'sessions'
+
+        @log.info method:'initialize', 'initialization complete for: %s', @name
+        console.log "initialization complete for: #{@name}"
+        @isReady = true
+        # this is not guaranteed to fire when all the registries have been initialized
+        process.nextTick => @emit 'ready'
+
+    # used to denote 'collection' that is stored inside this data store
     contains: (collection, entity) ->
-        entity.collection = collection
+        return @collections[collection] unless entity?
+
         entity.name = entity.model.prototype.name
+        entity.container = @
         entity.persist ?= true # default is to persist data
         entity.cache   ?= 1 # default cache for 1 second
         entity.controller ?= DataStoreController
-        @entities[entity.name] = entity
+        entity.collection = collection
 
+        @collections[collection] = @entities[entity.name] = entity
         @log.info collection:collection, "registered a collection of '#{collection}' into the store"
 
-    dump: ->
-        for name,entity of @entities
-            records = entity.registry?.list()
-            for record in records
-                @log.info model:name,record:record.serialize(),method:'dump', "DUMP"
+    # used to denote entity that is stored outside this data store
+    references: (entity) ->
+        assert entity.name? and entity.container instanceof DataStore, "cannot reference an entity that isn't contained by another store!"
+
+        entity = extend {}, entity # get a copy of it
+        entity.external = true # denote that this entity is an external reference!
+        entity.persist = false
+        entity.cache   = false
+        @entities[entity.name] = entity
+        @log.info reference:entity.name, "registered a reference to '#{entity.name}' into the store"
+
+    #-------------------------------
+    # main usage functions
+
+    # opens the store according to the provided requestor access constraints
+    # this should be subclassed for view control based on requestor
+    open: (requestor) -> new DataStoreView @, requestor
+
+    # register callback for being called on specific event against a collection
+    #
+    when: (collection, event, callback) ->
+        entity = @contains collection
+        assert entity? and entity.registry? and event in ['added','updated','removed'] and callback?, "must specify valid collection with event and callback to be notified"
+        _store = @
+        entity.registry.once 'ready', -> @on event, (args...) -> process.nextTick -> callback.apply _store, args
 
     createRecord: (type, data) ->
-        match = @findRecord type, data?.id
-        return if match?
-
-        #@log.info method:"createRecord", type: type, data: data
+        @log.debug method:"createRecord", type: type
         try
             entity = @entities[type]
-            record = new entity.model data,store:this,log:@log
-            record.useCache = entity.cache
-            record.controller = new entity.controller record,log:@log
+            record = new entity.model data,store:entity.container,log:@log,useCache:entity.cache
 
-            #record?.controller = @entities[type].controller
-            @log.info  method:"createRecord", id: record.id, 'created a new record for %s', record.constructor.name
-            #@log.debug method:"createRecord", record:record
+            # XXX - should consider this ONLY when created from a view
+            record.controller = new entity.controller
+                model:record
+                view: this
+                log: @log
+
+            @log.debug  method:"createRecord", id: record.id, 'created a new record for %s', record.constructor.name
         catch err
-            @log.error err, "unable to instantiate a new DS.Model for #{type}"
+            @log.error error:err, "unable to instantiate a new DS.Model for #{type}"
             throw err
         record
 
     deleteRecord: (type, id, callback) ->
         match = @findRecord type, id
-        callback null unless match?
+        return callback? null unless match?
         match.destroy callback
 
     updateRecord: (type, id, data, callback) ->
-        @find type, id, (err, matches) =>
-            if matches? and matches.length is 1
-                record = @findRecord type, matches[0].id
-                record.update data
-                if record
-                  record.save callback
-                else
-                   callback null
-            else
-                @log.warn method:'updateRecord',type:type,id:id,'unable to find existing record to update!'
-                callback null
+        record = @findRecord type, id
+        return callback? null unless record?
+        record.update data
+        record.save callback
 
     findRecord: (type, id) ->
         return unless type? and id?
-        record = @entities[type]?.registry?.get id
-        record
+        assert @entities[type]?.registry instanceof DataStoreRegistry, "trying to findRecord for #{type} without registry!"
+        @entities[type]?.registry?.get id
 
     # findBy returns the matching records directly (similar to findRecord)
-    # XXX - only supports a single key: value pair for now
     findBy: (type, condition, callback) ->
-        return callback "invalid findBy query params!" unless type? and typeof condition is 'object'
+        assert type? and typeof condition is 'object',
+            "DS: invalid findBy query params!"
 
-        @log.debug method:'find',type:type,condition:condition, 'issuing findBy on requested entity'
-        [ key, value ] = ([key, value] for key, value of condition)[0]
-        records = @entities[type]?.registry?.list()
-        results = (record for record in records when record.id? and record.get(key) is value) if records?.length > 0
+        @log.info method:'findBy',type:type,condition:condition, 'issuing findBy on requested entity'
+
+        records = @entities[type]?.registry?.list() or []
+
+        query = condition
+        hit = Object.keys(query).length
+        results = records.filter (record) =>
+            match = 0
+            for key,val of query
+                try
+                    x = record.get(key)
+                    x = switch
+                        when x instanceof DataStoreModel then x.id
+                        when typeof x is 'boolean' and typeof val is 'string' then (if x then 'true' else 'false')
+                        else x
+                catch err
+                    @log.debug method:'findBy',type:type,id:record.id,error:err,'skipping bad record...'
+                    return false
+                match += 1 if x is val or (x instanceof DataStoreModel and x.id is val)
+            if match is hit then true else false
 
         unless results?.length > 0
-            @log.warn method:'findBy',type:type,condition:condition,'unable to find any records for the condition!'
+            @log.info method:'findBy',type:type,condition:query,'unable to find any records for the condition!'
         else
-            @log.debug method:'findBy',type:type,condition:condition,'found %d matching results',results.length
-        callback null, results
+            @log.info method:'findBy',type:type,condition:query,'found %d matching results',results.length
+        callback? null, results
+        results
 
-    # find returns the properties
     find: (type, query, callback) ->
-        _entity = @entities[type]
-        return callback "DS: unable to find using unsupported type: #{type}" unless _entity?
-        #return callback "DS: unable to find without specified match condition" unless query?
-        return callback null, _entity.registry?.list() unless query?
+        assert @entities.hasOwnProperty(type),
+            "DS: unable to find using unsupported type: #{type}"
 
-        query = [ query ] unless query instanceof Array
+        _entity = @entities[type]
+        ids = switch
+            when query instanceof Array then query
+            when query instanceof Object
+                results = @findBy type, query
+                results.map (record) -> record.id
+            when query? then [ query ]
+            else _entity.registry?.keys()
 
         self = @
         tasks = {}
-        for id in query
+        for id in ids
             do (id) ->
                 tasks[id] = (callback) ->
                     match = self.findRecord type, id
-                    if match? and match instanceof DataStoreModel
-                        #match.getProperties (properties) -> callback null, properties
-                        match.getProperties (properties) -> callback null, match
-                    else
-                        return callback null unless _entity.helpers?.get?
-                        # # attempt to self get the requested info only valid for ID based query condition
-                        # _entity.helpers?.get.apply self, [id, (result) ->
-                        #     record = self.createRecord type, result if result?
-                        #     if record?
-                        #         # if we get a new record, we save it to our internal registry
-                        #         record.save callback
-                        #     else
-                        #         match = self.findRecord type, id
-                        #         if match?
-                        #             match.getProperties (props) -> callback null, props
-                        #         else
-                        #             self.log.warn method:'find',id:id, "unable to find or fetch #{type} record!"
-                        #             callback null
-                        # ]
+                    return callback null unless match? and match instanceof DataStoreModel
+                    # trigger a fresh computation and validations on the match
+                    try
+                        match.getProperties (err, props) -> callback null, match
+                    catch err
+                        self.log.warn error:err,type:type,id:id, 'unable to obtain validated properties from the matching record'
+                        # below silently ignores this record
+                        return callback null
 
-        @log.info method:'find',type:type,query:query, 'issuing find on requested entity'
+        @log.debug method:'find',type:type,query:query, 'issuing find on requested entity'
         async.parallel tasks, (err, results) =>
             if err?
                 @log.error err, "error was encountered while performing find operation on #{type} with #{query}!"
@@ -504,49 +787,51 @@ class DataStore
 
             matches = (entry for key, entry of results when entry?)
             unless matches?.length > 0
-                @log.warn method:'find',type:type,query:query,'unable to find any records matching the query!'
+                @log.debug method:'find',type:type,query:query,'unable to find any records matching the query!'
             else
                 @log.debug method:'find',type:type,query:query,'found %d matching results',matches.length
 
             callback null, matches
 
-    commit: (obj, isDestroy) ->
-        return unless obj instanceof DataStoreModel
+    commit: (record) ->
+        return unless record instanceof DataStoreModel
 
-        @log.debug method:"commit", record: obj
+        @log.debug method:"commit", record: record?.id
 
-        registry = (entity.registry for type, entity of @entities when entity.model?.prototype.constructor.name is obj.constructor.name)[0]
-        return unless registry
+        registry = @entities[record.name]?.registry
+        assert registry?, "cannot commit '#{record.name}' into store which doesn't contain the collection"
 
-        isDestroy ?= false
+        action = switch
+            when record.isDestroy
+                registry.remove record.id
+                'removed'
+            when not record.isSaved
+                exists = record.id? and registry.get(record.id)?
+                assert not exists, "cannot commit a new record '#{record.name}' into the store using pre-existing ID: #{record.id}"
 
-        # controller = obj.controller
-        # obj.controller = null
+                # if there is no ID specified for this entity, we auto-assign one at the time we commit
+                record.id ?= uuid.v4()
+                registry.add record.id, record
+                'added'
+            when record.isDirty()
+                record.changed = true
+                registry.update record.id, record
+                delete record.changed
+                'updated'
 
-        # if there is no ID specified for this entity, we auto-assign one at the time we commit
-        obj.id ?= uuid.v4()
-        match = registry.get obj.id
-        unless match?
-            registry.add(obj.id, obj) if not isDestroy
-        else
-            unless isDestroy
-                obj.changed = true
-                registry.update obj.id, obj
-                delete obj.changed
-            else
-                registry.remove obj.id
+        if action?
+            # may be high traffic events, should listen only sparingly
+            @emit 'commit', [ action, record.name, record.id ]
+            @log.info method:"commit", id:record.id, "#{action} '%s' on the store registry", record.constructor.name
 
-        # obj.controller = controller
-        @log.info method:"commit", id:obj.id, "updated the store registry for %s", obj.constructor.name
-        obj
+    #------------------------------------
+    # useful for some debugging cases...
+    dump: ->
+        for name,entity of @entities
+            records = entity.registry?.list()
+            for record in records
+                @log.info model:name,record:record.serialize(),method:'dump', "DUMP"
+
+#---------------------------------------------------------------------------------------------------------
 
 module.exports = DataStore
-module.exports.Model = DataStoreModel
-module.exports.Controller = DataStoreController
-module.exports.Registry = DataStoreRegistry
-
-module.exports.attr = (type, opts) -> type: type, opts: opts
-module.exports.belongsTo = (model, opts) -> mode: 1, model: model, opts: opts
-module.exports.hasMany = (model, opts) -> mode: 2, model: model, opts: opts
-module.exports.computed = (func, opts) -> computed: func, opts: opts
-module.exports.computedHistory = (model, opts) -> mode: 3, model: model, opts: opts
