@@ -9,7 +9,7 @@
     "test": "tests"
   },
   "scripts": {
-    "test": "tests/run.js",
+    "test": "mocha test",
     "prepublish": "mkdir -p lib; coffee -o lib -c src"
   },
   "devDependencies": {

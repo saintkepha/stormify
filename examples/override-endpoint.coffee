@@ -12,7 +12,7 @@ class StudentModel extends DS.Model
     schema:
         name:       DS.attr 'string', required: true                
         age:        DS.attr 'number', required: true
-        address:    DS.attr 'string', required: true                  
+        address:    DS.attr 'string', required: true                          
 
 
 #Store Definiton
@@ -23,8 +23,13 @@ class StudentDataStore extends DS
         store = this
 
         @contains 'students',
-            model: StudentModel      
-            
+            model: StudentModel    
+            serveOverride: true
+            serve: (opts) ->
+                baseUrl = opts?.baseUrl or ''
+                @post '/students': ->
+                    console.log @req.body
+                    return @send @req.body    
         @initialize()   
 
 #create a dataStore
