@@ -1,6 +1,6 @@
 EventEmitter = require('events').EventEmitter
 
-class StormRegistryData
+class StormRegistryData extends EventEmitter
 
     validate = require('json-schema').validate
 

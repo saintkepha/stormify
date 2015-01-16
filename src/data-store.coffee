@@ -113,7 +113,11 @@ class DataStoreModel extends SR.Data
                 model: val.model
             } if val.model?
 
-        @version ?= 1
+        assert Object.keys(@properties).length > 0, "cannot construct a new data model without declared schema properties!"
+
+        @revision ?= 1
+
+        return @ unless data?
 
         @setProperties data
         @id = @get('id')
@@ -567,7 +571,7 @@ class DataStoreView
 
 #---------------------------------------------------------------------------------------------------------
 
-class DataStore extends EventEmitter
+class DataStore extends DataStoreModel
 
     # various extensions available from this class object
     @Model      = DataStoreModel
@@ -575,32 +579,25 @@ class DataStore extends EventEmitter
     @View       = DataStoreView
     @Registry   = DataStoreRegistry
 
-    @attr       = @Model.attr
-    @belongsTo  = @Model.belongsTo
-    @hasMany    = @Model.hasMany
-    @computed   = @Model.computed
-    @computedHistory = @Model.computedHistory
+    # @attr       = @Model.attr
+    # @belongsTo  = @Model.belongsTo
+    # @hasMany    = @Model.hasMany
+    # @computed   = @Model.computed
+    # @computedHistory = @Model.computedHistory
 
     async = require 'async'
     uuid  = require 'node-uuid'
     extend = require('util')._extend
 
-    name: null # must be set by sub-class
+    name: 'ds'
+    schema: null
 
     adapters: {}
     adapter: (type, module) -> @adapters[type] = module if type? and module?
     using: (adapter) -> @adapters[adapter]
 
-    # stores: {}
-    # link: (store) -> @stores[store.name] = store if store?
-
-    constructor: (opts) ->
-        @name ?= opts?.name
-
-        assert @name?, "cannot construct DataStore without naming this store!"
-
-        @log = opts?.auditor?.child class: @constructor.name
-        @log ?= new bunyan name: @constructor.name
+    constructor: (data,opts) ->
+        super data, opts
 
         @collections = {} # the name of collection mapping to entity
         @entities = {}    # the name of entity mapping to entity object
@@ -612,16 +609,14 @@ class DataStore extends EventEmitter
         @datadir = opts?.datadir ? '/tmp'
 
         # if @constructor.name != 'DataStore'
-        #   assert Object.keys(@entities).length > 0, "cannot have a data store without declared entities!"
-
-    initialize: ->
-        return if @isReady
 
         console.log "initializing a new DataStore: #{@name}"
-        @log.info method:'initialize', 'initializing a new DataStore: %s', @name
-        for collection, entity of @collections
-            do (collection,entity) =>
-                entity.registry ?= new DataStoreRegistry collection, log:@log,store:@,persist:entity.persist
+        @log.info method:'constructor', 'initializing a new DataStore: %s', @name
+        for name,prop of @properties
+            continue unless prop.model? and prop.mode is 2
+
+            do (name,prop) =>
+                prop.registry ?= new DataStoreRegistry name, log:@log,store:@,persist:prop.opts?.persist
                 if entity.static?
                     entity.registry.once 'ready', =>
                         @log.info collection:collection, 'loading static records for %s', collection

@@ -1,7 +1,7 @@
 {
   "name": "stormify",
-  "version": "0.4.26",
-  "description": "Stormify enables rapid web applications construction using ember style Data Stores",
+  "version": "0.5.0",
+  "description": "A framework for creating new DataStorms based on Ember-style data models",
   "author": "Peter K Lee <peter@intercloud.net>",
   "main": "lib/stormify.js",
   "directories": {
@@ -36,6 +36,7 @@
     "dirty": "0.9.9",
     "json-schema": "0.2.2",
     "node-uuid": "1.4.1",
+		"express": "^4.9.0",
     "passport": "0.2.1",
     "passport-anonymous": "1.0.1",
     "promise": "^6.0.1"
