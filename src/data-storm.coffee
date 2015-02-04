@@ -68,13 +68,6 @@ class DataStoreRegistry extends SR
 
 #---------------------------------------------------------------------------------------------------------
 
-DataStormModel = require './data-storm-model'
-
-class DataStormRecord extends DataStormModel
-
-
-
-
 #---------------------------------------------------------------------------------------------------------
 
 EventEmitter = require('events').EventEmitter
@@ -177,13 +170,18 @@ class DataStoreView
 
 #---------------------------------------------------------------------------------------------------------
 
+DataStormModel  = require './data-storm-model'
+DataStormRecord = require './data-storm-record'
+
 class DataStorm extends DataStormModel
 
     # various extensions available from this class object
-    @Model      = DataStoreModel
-    @Controller = DataStoreController
-    @View       = DataStoreView
-    @Registry   = DataStoreRegistry
+    @Model      = DataStormModel
+    @Record     = DataStormRecord
+
+    @Controller = DataStormController
+    @View       = DataStormView
+    @Registry   = DataStormRegistry
 
     # @attr       = @Model.attr
     # @belongsTo  = @Model.belongsTo
@@ -192,7 +190,6 @@ class DataStorm extends DataStormModel
     # @computedHistory = @Model.computedHistory
 
     async = require 'async'
-    extend = require('util')._extend
 
     # DataStorm default properties schema
     logfile:   @attr 'string', defaultValue: "/tmp/#{@name}-@{@id}.log"
@@ -200,23 +197,25 @@ class DataStorm extends DataStormModel
     datadir:   @attr 'string', defaultValue: '/tmp'
     isMutable: @attr 'boolean', defaultValue: true # Allows this DataStorm to be changed via API calls
 
+    # DataStorm auto-computed properties
     models: @computed (->
-        # returns all available models
-    )
-    controllers: @computed (->
-        # returns all available controllers
-    )
+        # auto-calculate available models in this DataStorm
+        @_models
 
+    )
     host: @computed (-> 'something')
 
 
 
-    constructor: (data) ->
-        super data
+    constructor: ->
+        super
+
+        # create an instance of each model for the DataStorm to use
+        v.instance = new v.model for k, v of @_models
 
         @collections = {} # the name of collection mapping to entity
         @entities = {}    # the name of entity mapping to entity object
-        @entities = extend(@entities, opts.entities) if opts?.entities?
+        @entities = @extend(@entities, opts.entities) if opts?.entities?
 
         @authorizer = opts?.authorizer
 
@@ -254,31 +253,6 @@ class DataStorm extends DataStormModel
         # this is not guaranteed to fire when all the registries have been initialized
         process.nextTick => @emit 'ready'
 
-    # used to denote 'collection' that is stored inside this data store
-    contains: (collection, entity) ->
-        return @collections[collection] unless entity?
-
-        entity.name = entity.model.prototype.name
-        entity.container = @
-        entity.persist ?= true # default is to persist data
-        entity.cache   ?= 1 # default cache for 1 second
-        entity.controller ?= DataStoreController
-        entity.collection = collection
-
-        @collections[collection] = @entities[entity.name] = entity
-        @log.info collection:collection, "registered a collection of '#{collection}' into the store"
-
-    # used to denote entity that is stored outside this data store
-    references: (entity) ->
-        assert entity.name? and entity.container instanceof DataStore, "cannot reference an entity that isn't contained by another store!"
-
-        entity = extend {}, entity # get a copy of it
-        entity.external = true # denote that this entity is an external reference!
-        entity.persist = false
-        entity.cache   = false
-        @entities[entity.name] = entity
-        @log.info reference:entity.name, "registered a reference to '#{entity.name}' into the store"
-
     #-------------------------------
     # main usage functions
 
@@ -293,24 +267,6 @@ class DataStorm extends DataStormModel
         assert entity? and entity.registry? and event in ['added','updated','removed'] and callback?, "must specify valid collection with event and callback to be notified"
         _store = @
         entity.registry.once 'ready', -> @on event, (args...) -> process.nextTick -> callback.apply _store, args
-
-    createRecord: (type, data) ->
-        @log.debug method:"createRecord", type: type
-        try
-            entity = @entities[type]
-            record = new entity.model data,store:entity.container,log:@log,useCache:entity.cache
-
-            # XXX - should consider this ONLY when created from a view
-            record.controller = new entity.controller
-                model:record
-                view: this
-                log: @log
-
-            @log.debug  method:"createRecord", id: record.id, 'created a new record for %s', record.constructor.name
-        catch err
-            @log.error error:err, "unable to instantiate a new DS.Model for #{type}"
-            throw err
-        record
 
     deleteRecord: (type, id, callback) ->
         match = @findRecord type, id
@@ -441,4 +397,33 @@ class DataStorm extends DataStormModel
 
 #---------------------------------------------------------------------------------------------------------
 
-module.exports = DataStore
+module.exports = DataStorm
+
+### DEPRECATED
+
+    # used to denote 'collection' that is stored inside this data store
+    contains: (collection, entity) ->
+        return @collections[collection] unless entity?
+
+        entity.name = entity.model.prototype.name
+        entity.container = @
+        entity.persist ?= true # default is to persist data
+        entity.cache   ?= 1 # default cache for 1 second
+        entity.controller ?= DataStoreController
+        entity.collection = collection
+
+        @collections[collection] = @entities[entity.name] = entity
+        @log.info collection:collection, "registered a collection of '#{collection}' into the store"
+
+    # used to denote entity that is stored outside this data store
+    references: (entity) ->
+        assert entity.name? and entity.container instanceof DataStore, "cannot reference an entity that isn't contained by another store!"
+
+        entity = extend {}, entity # get a copy of it
+        entity.external = true # denote that this entity is an external reference!
+        entity.persist = false
+        entity.cache   = false
+        @entities[entity.name] = entity
+        @log.info reference:entity.name, "registered a reference to '#{entity.name}' into the store"
+
+###

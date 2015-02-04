@@ -93,14 +93,29 @@ module.exports =
     remover: remover
 
 ##
+# Create an instance of stormify express app to be used by the
+# invoking routine to mount as a sub-app or to run as the primary app
+#
 # USAGE:
 #
 # stormify = require 'stormify'
 #
 # 1. use a new editable blank DataStorm instance
-# @use stormify.express new stormify.DS name:'blank', edit:true
+#
+# storm = stormify.express new stormify.DS name:'blank', edit:true
+#
+# 1a. mount as a sub-app middleware to existing express
+#
+# @use storm
+# or
+# @use '/someplace', storm
+#
+# 1b. run as the primary express app
+#
+# storm.listen 5330
 #
 # 2. use a pre-defined DataStorm instance
+#
 # class StuffStorm extends stormify.DS
 #   name: 'newstorm'
 #   schema:
@@ -108,9 +123,17 @@ module.exports =
 #
 # @use stormify.express new StuffStorm
 #
-module.exports.express = (storm) ->
-    assert storm instanceof DataStorm,
+module.exports.express = (ds) ->
+    assert ds instanceof DataStorm,
         'cannot express without valid DataStorm passed-in'
+
+    app = (require 'express')()
+    bp = require 'body-parser'
+
+    app.use bp.urlencoded(extended:true), bp.json(strict:true), (require 'passport').initialize()
+
+    ds.once 'ready', ->
+        app.use
 
     serializer = (data) ->
         switch
@@ -123,7 +146,7 @@ module.exports.express = (storm) ->
 
     router = (require 'express').Router()
     router.param 'collection', (req,res,next,collection) ->
-        req.collection = storm.contains collection
+        req.collection = req.storm.contains collection
         if req.collection? then next() else next('route')
 
     router.param 'id', (req,res,next,id) ->
@@ -138,14 +161,14 @@ module.exports.express = (storm) ->
         req.action = req.record.invoke action, req.query, req.body # returns a Promise
         if req.action? then next() else next('route')
 
-    router.all '*', (authorizer storm), (req,res,next) ->
-        req.storm = storm.open req.user
+    router.all '*', (authorizer ds), (req,res,next) ->
+        req.storm = ds.open req.user
         next()
 
     ##
     # provide handling of this DataStorm
     ##
-    router.route "#{storm.name}"
+    router.route "/"
     .all (req, res, next) ->
         # XXX - verify req.user has permissions to operate on the DataStorm
         #
@@ -163,7 +186,7 @@ module.exports.express = (storm) ->
     ##
     # provide handling of this DataStorm's Collection
     ##
-    router.route "#{storm.name}/:collection"
+    router.route "#{ds.name}/:collection"
     .all (req, res, next) ->
         # XXX - verify req.user has permissions to operate on the DataStorm.Collection
         #
@@ -295,7 +318,7 @@ module.exports.express = (storm) ->
 
     # open up a socket.io connection stream for store updates
 
-    return router
+    return app
 
 #----------------------
 # OLD DEPRECATED METHOD
