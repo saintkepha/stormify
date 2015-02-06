@@ -1,6 +1,6 @@
 {
   "name": "stormify",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "A framework for creating new DataStorms based on Ember-style data models",
   "author": "Peter K Lee <peter@intercloud.net>",
   "main": "lib/stormify.js",

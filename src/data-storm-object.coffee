@@ -1,145 +1,225 @@
+Array::unique = ->
+    return @ unless @length > 0
+    output = {}
+    for key in [0..@length-1]
+      val = @[key]
+      switch
+          when typeof val is 'object' and val.id?
+              output[val.id] = val
+          else
+              output[val] = val
+    #output[@[key]] = @[key] for key in [0...@length]
+    value for key, value of output
+
+Array::contains = (query) ->
+    return false if typeof query isnt "object"
+    hit = Object.keys(query).length
+    @some (item) ->
+        match = 0
+        for key, val of query
+            match += 1 if item[key] is val
+        if match is hit then true else false
+
+Array::where = (query) ->
+    return [] if typeof query isnt "object"
+    hit = Object.keys(query).length
+    @filter (item) ->
+        match = 0
+        for key, val of query
+            match += 1 if item[key] is val
+        if match is hit then true else false
+
+Array::without = (query) ->
+    return @ if typeof query isnt "object"
+    @filter (item) ->
+        for key,val of query
+            return true unless item[key] is val
+        false # item matched all query params
+
+Array::pushRecord = (record) ->
+    return null if typeof record isnt "object"
+    @push record unless @contains(id:record.id)
 
 class PropertyValidationError extends Error
 
+assert = require 'assert'
+
 class DataStormProperty
+
+  constructor: (@type, @opts={}, @obj) ->
+    assert obj instanceof DataStormObject,
+        "cannot register a new property without a reference to an object it belongs to"
+
+    @opts.required ?= false
+    @opts.unique ?= false
+
     ###*
     # @property value
     ###
-    value: undefined
-
+    @value = undefined
     ###*
     # @property isDirty
     # @default false
     ###
-    isDirty: false
+    @isDirty = false
 
-    constructor: (@type, @opts, @obj) ->
-        assert obj instanceof DataStormObject,
-            "cannot register a new property without a reference to an object it belongs to"
-        @opts ?= required: false
-        @value = [] if @type is 'array'
+  get: -> if @value instanceof DataStormProperty then @value.get() else @value
 
-    get: ->
-        @value ?= switch
-            when typeof @opts.defaultValue is 'function' then @opts.defaultValue.call @obj
-            else @opts?.defaultValue
+  set: (value, opts={}) ->
+    #console.log "setting #{@constructor.name} of type: #{@type} with:"
+    #console.log value
+    ArrayEquals = (a,b) -> a.length is b.length and a.every (elem, i) -> elem is b[i]
 
-        if typeof @value is 'array'
-            @value = (@value.filter (e) -> e?)
-            @value = @value.unique() if @opts.unique is true
+    value ?= switch
+      when typeof @opts.defaultValue is 'function' then @opts.defaultValue.call @obj
+      else @opts.defaultValue
 
-        return new PropertyValidationError @value unless @validate()
+    cval = @value
+    nval = @normalize value
 
-        @value
+    if nval instanceof Array and nval.length > 0
+      nval = (nval.filter (e) -> e?)
+      nval = nval.unique() if @opts.unique is true
 
-    set: (value) ->
-        ArrayEquals = (a,b) -> a.length is b.length and a.every (elem, i) -> elem is b[i]
+    # if nval instanceof DataStormProperty
+    #   opts.skipValidation = true
 
-        cval = @value
-        nval = switch @type
-            when 'date' and typeof value is 'string'
-                new Date value
-            when 'array' and typeof value isnt 'array'
-                if value? then [ value ] else []
-            else
-                value
+    #console.log "set() validating new value: #{nval}"
 
-        @isDirty = switch
-            when @type is 'array' then not ArrayEquals cval, nval
-            when cval is nval then false
-            else true
-        @value = nval
+    unless opts.skipValidation is true or @validate nval
+        return new PropertyValidationError nval
 
-        @obj # return object containing this property to allow chaining
+    @isDirty = switch
+      when not cval? and nval? then true
+      when @type is 'array' then not ArrayEquals cval, nval
+      when cval is nval then false
+      else true
+    @value = nval if @isDirty is true
 
-    validate: ->
-        # we shouldn't allow validator to return value?
-        if typeof @opts.validator is 'function'
-            @value = @opts.validator.call @obj, @value
+    #console.log "set() isDirty: #{@isDirty} and value: #{@value}"
+    this
 
-        unless @value? and @opts.required is true
-            return false
+  validate: (value=@value) ->
+    # execute custom validator if available
+    if typeof @opts.validator is 'function'
+      return (@opts.validator.call @obj, value)
 
-        switch @type
-            when 'string' or 'number' or 'boolean' or 'object'
-                typeof @value is @type
-            when 'date'
-                @value instanceof Date
-            when 'array'
-                @value instanceof Array
-            else
-                true
+    unless value?
+      return (@opts.required is false)
+
+    if value instanceof DataStormProperty
+      value = value.get()
+
+    switch @type
+      when 'string' or 'number' or 'boolean' or 'object'
+        typeof value is @type
+      when 'date'
+        value instanceof Date
+      when 'array'
+        value instanceof Array
+      else
+        true
+
+  normalize: (value) ->
+    switch
+      when value instanceof Object and typeof value.stormify is 'function'
+        # a special case, returns new form of DataStormProperty
+        value.stormify.call @obj
+      when @type is 'date' and typeof value is 'string'
+        new Date value
+      when @type is 'array' and not (value instanceof Array)
+        if value? then [ value ] else []
+      else
+        value
+
+  serialize: (value=@value) ->
+    switch
+      when typeof @opts.serializer is 'function'
+        @opts.serializer.call @obj, value
+      when value instanceof DataStormProperty
+        value.serialize()
+      else
+        value
 
 class ComputedProperty extends DataStormProperty
-    ###*
-    # @property func
-    # @default null
-    ###
-    @func = -> null
+  ###*
+  # @property func
+  # @default null
+  ###
+  @func = -> null
 
-    constructor: (@func, opts, obj) ->
-        assert typeof func is 'function',
-            "cannot register a new ComputedProperty without a function"
-        type = opts?.type ? 'computed'
-        super type, opts, obj
-        @cachedOn = new Date() if opts.cache > 0
+  constructor: (@func, opts={}, obj) ->
+    assert typeof func is 'function',
+      "cannot register a new ComputedProperty without a function"
+    type = opts.type ? 'computed'
+    super type, opts, obj
+    @cache = opts.cache ? 0
+    @cachedOn = new Date() if @cache > 0
 
-    isCachedValid: -> @opts.cache > 0 and (new Date() - @cachedOn)/1000 < @opts.cache
+  isCachedValid: -> @cache > 0 and (new Date() - @cachedOn)/1000 < @cache
 
-    get: ->
-        unless @value? or @isCachedValid()
-            # XXX - handle @opts.async is 'true' in the future (return a Promise)
+  get: ->
+    unless @value? and @isCachedValid()
+      # XXX - handle @opts.async is 'true' in the future (return a Promise)
+      @set (@func.call @obj)
+      @cachedOn = new Date() if @cache > 0
+    super
 
-            @value = @func.call @obj
-            @cachedOn = new Date() if @opts.cache > 0
-        super
+  serialize: -> super @get()
 
 
 class DataStormObject
-    @attr      = (type, opts) -> new DataStormProperty type, opts, this
-    @computed  = (func, opts) -> new ComputedProperty func, opts, this
+  @attr      = (type, opts) -> stormify: -> new DataStormProperty type, opts, this
+  @computed  = (func, opts) -> stormify: -> new ComputedProperty func, opts, this
 
-    @Property = DataStormProperty
+  @Property = DataStormProperty
 
-    @assert = require 'assert'
-    @extend = require('util')._extend
+  constructor: (data) ->
+    @_properties = {}
+    for key, val of this when val instanceof Object and typeof val.stormify is 'function'
+      @_properties[key] = val.stormify.call this
 
-    _properties: {}
+    # initialize all properties to defaultValues
+    @everyProperty (key) -> @set undefined, skipValidation: true
+    (@setProperties data, skipValidation: true) if data?
 
-    constructor: (data) ->
-        p = @extend {}, this.constructor.prototype
-        @_properties[key] = p[key] for key in Object.keys(p) when p[key] instanceof DataStormProperty
-        @setProperties data if data?
+  get: (keyName, opts) -> @_properties[keyName]?.get opts
+  set: (keyName, value, opts) -> @_properties[keyName]?.set value, opts
 
-    get: (keyName, opts) -> @_properties[keyName]?.get opts
-    set: (keyName, value, opts) -> @_properties[keyName]?.set value, opts
+  getPropertyObject: (keyName) -> @_properties[keyName]
 
-    everyProperty: (func) -> func?.call(prop, key) for key, prop of @_properties
+  everyProperty: (func) -> (func?.call prop, key) for key, prop of @_properties
 
-    validate: -> @everyProperty (key) -> name: key, isValid: @validate()
+  validate: -> (@everyProperty (key) -> name: key, isValid: @validate()).filter (e) -> e.isValid is false
 
-    setProperties: (obj) ->
-        return unless obj instanceof Object
-        @set key, value for key, value of obj
+  setProperties: (obj, opts) ->
+    return unless obj instanceof Object
+    @set key, value, opts for key, value of obj
+    this # make it chainable
 
-    getProperties: (keys) ->
-        o = {}
-        unless keys? and keys instanceof Array
-            @everyProperty (key) -> o[key] = @get()
-        else
-            o[key] = @get key for key in keys when typeof key is 'string' or typeof key is 'number'
-        o
+  getProperties: (keys) ->
+    o = {}
+    unless keys? and keys instanceof Array
+      @everyProperty (key) -> o[key] = @get()
+    else
+      o[key] = @get key for key in keys when typeof key is 'string' or typeof key is 'number'
+    o
 
-    clearDirty: -> @everyProperty -> @isDirty = false
-    dirtyProperties: (keys) -> (@everyProperty (key) -> @isDirty ? key).filter (x) ->
-        if keys? then x? and x in keys else x?
-    isDirty: (keys) ->
-        keys = [ keys ] if keys? and keys not instanceof Array
-        (@dirtyProperties keys).length > 0
+  serialize: ->
+    o = {}
+    @everyProperty (key) -> o[key] = @serialize()
+    o
 
-        ### for future optimization reference
-        dirty = @dirtyProperties().join ' '
-        keys.some (prop) -> ~dirty.indexOf prop
-        ###
+  clearDirty: -> @everyProperty -> @isDirty = false
+  dirtyProperties: (keys) -> (@everyProperty (key) -> @isDirty ? key).filter (x) ->
+    if keys? then x? and x in keys else x?
+  isDirty: (keys) ->
+    keys = [ keys ] if keys? and keys not instanceof Array
+    (@dirtyProperties keys).length > 0
+
+    ### for future optimization reference
+    dirty = @dirtyProperties().join ' '
+    keys.some (prop) -> ~dirty.indexOf prop
+    ###
 
 module.exports = DataStormObject
