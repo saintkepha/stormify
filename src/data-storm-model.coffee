@@ -30,9 +30,9 @@ class BelongsToProperty extends RelationshipProperty
   validate:  (value=@value) -> (super value) is true and (not value? or @model::fetch value instanceof @model)
   normalize: (value) ->
     #console.log 'belongsTo.normalize'
-    super switch
+    switch
       when not value? then undefined
-      when value instanceof @model then value.get('id')
+      when value instanceof @model then value.get 'id'
       when typeof value is 'string' then value
       when typeof value is 'number' then "#{value}"
       when value instanceof Array then undefined
@@ -41,6 +41,7 @@ class BelongsToProperty extends RelationshipProperty
         @obj.bind record
         @normalize record
       else undefined
+
   serialize: ->
     if @opts.embedded is true
       @get().serialize()
@@ -61,11 +62,11 @@ class HasManyProperty extends RelationshipProperty
   validate: (value=@value) -> (super value) is true and value.every (e) => (@model::fetch e) instanceof @model
 
   normalize: (value) ->
-    #console.log 'normalizing hasMany'
+    # console.log 'normalizing hasMany'
+    # console.log value
     super switch
       when value instanceof Array
-        (value.filter (e) -> e?).map (e) =>
-          BelongsToProperty::normalize.call this, e
+        (value.filter (e) -> e?).map (e) => BelongsToProperty::normalize.call this, e
       else undefined
 
   serialize: ->
@@ -75,11 +76,46 @@ class HasManyProperty extends RelationshipProperty
     else
       super
 
+DataStormRegistry = require './data-storm-registry'
+
+class ModelRegistryProperty extends DataStormRegistry.Property
+
+  constructor: (@model, opts, obj) -> super 'object', opts, obj
+
+  match: (query, keys=false) ->
+    switch
+      when query instanceof Array then super
+      when query instanceof Object
+        for k, v of @get() when v.match query
+          if keys then k else v
+      else
+        super
+
+class ModelRegistry extends DataStormRegistry
+
+  @Property = ModelRegistryProperty
+
+  register: (model, opts) ->
+    super model.name, new ModelRegistryProperty model, opts, this
+
+  add: (records...) ->
+    obj = {}
+    obj[record.get('id')] = record for record in records when record instanceof DataStormModel
+    super record.constructor.name, obj
+
+  remove: (records...) ->
+    query = (record.get('id') for record in records when record instanceof DataStormModel)
+    super record.constructor.name, query
+
+
 class DataStormModel extends DataStormObject
 
   @belongsTo = (model, opts) -> stormify: -> new BelongsToProperty model, opts, this
   @hasMany   = (model, opts) -> stormify: -> new HasManyProperty model, opts, this
   @action    = (func, opts)  -> stormify: -> new ActionProperty func, opts, this
+
+  @Property = RelationshipProperty
+  @Registry = ModelRegistry
 
   # default schema for all DataStormModels
   id:         @attr 'string', defaultValue: -> (require 'node-uuid').v4()
@@ -88,68 +124,73 @@ class DataStormModel extends DataStormObject
   accessedOn: @attr 'date', defaultValue: -> new Date
 
   # internal tracking of bound model records
-  _bindings: @hasMany DataStormModel
+  _bindings: @hasMany DataStormModel, private: true
 
-  # this is a PRIVATE shared prototype hash map visible across ALL
-  # model instances (intentionally undocumented)
-  _models: {}
+  # this is a PRIVATE shared prototype singleton ModelRegistry
+  # instance visible across ALL model instances (intentionally
+  # undocumented)
+  #
+  # It is publicly accessible via the DataStorm class
+  _models: new ModelRegistry
 
   constructor: (data) ->
     super data
-    @_id = @get('id')
-    @_name = @constructor.name
-
-    unless @_models.hasOwnProperty @constructor.name
-        @_models[@constructor.name] =
-            model: @constructor
-            records: {}
+    @_models.register @constructor
 
   get: ->
       @set 'accessedOn', new Date
       super
 
-  fetch: (id) -> @_models[@constructor.name]?.records?[id]
-  modelFor: (modelName) -> @_models[modelName]
+  fetch: (id) -> @_models.find @constructor.name, id
 
   getRelationships: (kind) ->
       @everyProperty (key) -> this if this instanceof RelationshipProperty
       .filter (x) -> x? and (not kind? or kind is x.kind)
 
+  ###*
+  # `bind` subjugates passed in records to be bound to the lifespan of
+  # the current model record.
+  #
+  # When this current model record is destroyed, all bound dependents
+  # will also be destroyed.
+  ###
   bind: (records...) ->
     for record in records
       continue unless record? and record instanceof DataStormModel
-      (@getPropertyObject '_bindings').push record.save()
+      (@getProperty '_bindings').push record.save()
 
   match: (query) ->
       for k, v of query
-          x = (@getPropertyObject k)?.normalize (@get k)
+          x = (@getProperty k)?.normalize (@get k)
           x = "#{x}" if typeof x is 'boolean' and typeof v is 'string'
           return false unless x is v
       return true
 
   save: ->
-    #console.log 'SAVING:'
+    # XXX - a bit ugly at the moment...
+    # console.log 'SAVING:'
     isValid = @validate()
-    #console.log isValid
+    # console.log isValid
     if isValid.length is 0
         (@set 'modifiedOn', new Date) if @isDirty()
         @clearDirty()
-        @_models[@constructor.name].records[@_id] = this
+        @_models.add this
         this
     else
         null
 
   destroy: ->
       record.destroy() for record in @get '_bindings'
-      delete @_models[@constructor.name].records[@_id]
+      @_models.remove this
 
-  @Promise = require 'promise'
-  # a method to invoke a registered promised action on the record
-  invoke: (action, params, data) ->
-      new @Promise (resolve,reject) =>
-          try
-              resolve @_actions[action]?.call(this, params, data)
-          catch err
-              reject err
+
+  # @Promise = require 'promise'
+  # # a method to invoke a registered promised action on the record
+  # invoke: (action, params, data) ->
+  #     new @Promise (resolve,reject) =>
+  #         try
+  #             resolve @_actions[action]?.call(this, params, data)
+  #         catch err
+  #             reject err
 
 module.exports = DataStormModel

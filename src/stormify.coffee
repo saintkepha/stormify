@@ -1,17 +1,4 @@
-assert = require 'assert'
-
-DataStore = require './data-store'
-
-createStore = (opts) ->
-    assert opts.store?.prototype?.constructor?.name, "store must be a class definition for the DataStore"
-
-    store = new opts.store
-        auditor: opts.auditor
-        authorizer: opts.authorizer
-        datadir:opts.datadir
-
-    assert store instanceof DataStore, "unable to instantiate store as DataStore instance"
-    store
+DataStorm = require './data-storm'
 
 passport = require 'passport'
 BearerStrategy = require 'passport-http-bearer'
@@ -20,11 +7,11 @@ AnonymousStrategy = require 'passport-anonymous'
 passport.use new AnonymousStrategy
 
 authorizer = (store) ->
-    if store.authorizer? and store.authorizer instanceof DataStore
+    if store.authorizer? and store.authorizer instanceof DataStorm
         passport.use new BearerStrategy (token,done) ->
             token = store.authorizer.findRecord 'token', token
             # should verify that it is AuthorizationToken once we bundle that in stormify
-            if token? and token instanceof DataStore.Model
+            if token? and token instanceof DataStorm.Model
                 identity = token.get('identity')
                 session = token.get('session')
                 if identity? and session?
@@ -40,15 +27,7 @@ authorizer = (store) ->
 #
 # EXPORTS
 #
-module.exports =
-    createStore: createStore
-    SR: require './stormregistry'
-    DS: DataStore
-    authorizer: authorizer
-    poster: poster
-    getter: getter
-    putter: putter
-    remover: remover
+module.exports.DS = DataStorm
 
 ##
 # Create an instance of stormify express app to be used by the
@@ -82,6 +61,8 @@ module.exports =
 # @use stormify.express new StuffStorm
 #
 module.exports.express = (ds) ->
+    assert = require 'assert'
+
     assert ds instanceof DataStorm,
         'cannot express without valid DataStorm passed-in'
 
@@ -89,9 +70,9 @@ module.exports.express = (ds) ->
     bp = require 'body-parser'
 
     app.use bp.urlencoded(extended:true), bp.json(strict:true), (require 'passport').initialize()
+    app.set 'json spaces': 2
 
-    ds.once 'ready', ->
-        app.use
+    authorizer = (storm) -> (req, res, next) -> next()
 
     serializer = (data) ->
         switch
@@ -110,7 +91,7 @@ module.exports.express = (ds) ->
     router.param 'id', (req,res,next,id) ->
         assert req.collection?,
             "cannot retrieve '#{id}' without a valid collection!"
-        req.record = req.collection.find id
+        req.record = req.collection.match id
         if req.record? then next() else next('route')
 
     router.param 'action', (req,res,next,action) ->
@@ -120,7 +101,8 @@ module.exports.express = (ds) ->
         if req.action? then next() else next('route')
 
     router.all '*', (authorizer ds), (req,res,next) ->
-        req.storm = ds.open req.user
+        #req.storm = ds.open req.user
+        req.storm = ds
         next()
 
     ##
@@ -140,6 +122,16 @@ module.exports.express = (ds) ->
     .copy (req, res, next) ->
         # XXX - generate JSON serialized copy of this DataStorm
         next()
+
+    # always send back contents of 'result' if available
+    router.use (req, res, next) ->
+        unless res.locals.result? then return next 'route'
+        res.setHeader 'Expires','-1'
+        res.send res.locals.result
+        next()
+
+    app.use router
+    return app
 
     ##
     # provide handling of this DataStorm's Collection
@@ -276,6 +268,7 @@ module.exports.express = (ds) ->
 
     # open up a socket.io connection stream for store updates
 
+    app.use router
     return app
 
 #----------------------

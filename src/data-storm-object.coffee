@@ -66,8 +66,8 @@ class DataStormProperty
   get: -> if @value instanceof DataStormProperty then @value.get() else @value
 
   set: (value, opts={}) ->
-    #console.log "setting #{@constructor.name} of type: #{@type} with:"
-    #console.log value
+    # console.log "setting #{@constructor.name} of type: #{@type} with:"
+    # console.log value
     ArrayEquals = (a,b) -> a.length is b.length and a.every (elem, i) -> elem is b[i]
 
     value ?= switch
@@ -77,6 +77,9 @@ class DataStormProperty
     cval = @value
     nval = @normalize value
 
+    # console.log "set() normalized new value: #{nval}"
+    # console.log nval
+
     if nval instanceof Array and nval.length > 0
       nval = (nval.filter (e) -> e?)
       nval = nval.unique() if @opts.unique is true
@@ -84,7 +87,8 @@ class DataStormProperty
     # if nval instanceof DataStormProperty
     #   opts.skipValidation = true
 
-    #console.log "set() validating new value: #{nval}"
+    # console.log "set() validating new value: #{nval}"
+    # console.log nval
 
     unless opts.skipValidation is true or @validate nval
         return new PropertyValidationError nval
@@ -177,33 +181,50 @@ class DataStormObject
   constructor: (data) ->
     @_properties = {}
     for key, val of this when val instanceof Object and typeof val.stormify is 'function'
-      @_properties[key] = val.stormify.call this
+      @addProperty key, (val.stormify.call this)
 
     # initialize all properties to defaultValues
     @everyProperty (key) -> @set undefined, skipValidation: true
-    (@setProperties data, skipValidation: true) if data?
+    (@set data, skipValidation: true) if data?
 
-  get: (keyName, opts) -> @_properties[keyName]?.get opts
-  set: (keyName, value, opts) -> @_properties[keyName]?.set value, opts
+  keys: -> Object.keys @_properties
 
-  getPropertyObject: (keyName) -> @_properties[keyName]
+  addProperty: (key, property) ->
+    if not (@hasProperty key) and property instanceof DataStormProperty
+      @_properties[key] = property
+    property
+
+  removeProperty: (key) -> delete @_properties[key] if @hasProperty key
+  getProperty: (key) -> @_properties[key] if @hasProperty key
+  hasProperty: (key) -> @_properties.hasOwnProperty key
+
+  get: (keys...) ->
+    result = {}
+    switch
+      when keys.length is 0
+        @everyProperty (key) -> result[key] = @get()
+      when keys.length is 1
+        result = (@getProperty keys[0])?.get()
+      else
+        result[key] = (@getProperty key)?.get() for key in keys
+    result
+
+  ###*
+  # `set` is used to place values on matching DataStormProperty
+  # instances. Accepts an object of key/values
+  #
+  # obj.set hello:'world'
+  #
+  # { hello: 'world' }
+  ###
+  set: (obj, opts) ->
+    return unless obj instanceof Object
+    ((@getProperty key)?.set value, opts) for key, value of obj
+    this # make it chainable
 
   everyProperty: (func) -> (func?.call prop, key) for key, prop of @_properties
 
   validate: -> (@everyProperty (key) -> name: key, isValid: @validate()).filter (e) -> e.isValid is false
-
-  setProperties: (obj, opts) ->
-    return unless obj instanceof Object
-    @set key, value, opts for key, value of obj
-    this # make it chainable
-
-  getProperties: (keys) ->
-    o = {}
-    unless keys? and keys instanceof Array
-      @everyProperty (key) -> o[key] = @get()
-    else
-      o[key] = @get key for key in keys when typeof key is 'string' or typeof key is 'number'
-    o
 
   serialize: ->
     o = {}

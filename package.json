@@ -1,6 +1,6 @@
 {
   "name": "stormify",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "A framework for creating new DataStorms based on Ember-style data models",
   "author": "Peter K Lee <peter@intercloud.net>",
   "main": "lib/stormify.js",
@@ -31,14 +31,15 @@
   },
   "homepage": "https://github.com/stormstack/stormify",
   "dependencies": {
-    "async": "0.8.0",
+    "body-parser": "^1.9.3",
     "bunyan": "1.2.1",
     "dirty": "0.9.9",
     "json-schema": "0.2.2",
     "node-uuid": "1.4.1",
 		"express": "^4.9.0",
-    "passport": "0.2.1",
-    "passport-anonymous": "1.0.1",
+    "passport": "^0.2.1",
+    "passport-anonymous": "^1.0.1",
+    "passport-http-bearer": "^1.0.1",
     "promise": "^6.0.1"
   },
   "contributors": [
