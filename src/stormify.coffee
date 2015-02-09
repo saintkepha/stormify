@@ -1,4 +1,4 @@
-DataStorm = require './data-storm'
+DataStorm = require 'stormify-data'
 
 passport = require 'passport'
 BearerStrategy = require 'passport-http-bearer'

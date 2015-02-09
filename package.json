@@ -1,7 +1,7 @@
 {
   "name": "stormify",
-  "version": "0.5.2",
-  "description": "A framework for creating new DataStorms based on Ember-style data models",
+  "version": "0.5.3",
+  "description": "Enable express-ing new DataStorms based on stormify-data data models",
   "author": "Peter K Lee <peter@intercloud.net>",
   "main": "lib/stormify.js",
   "directories": {
@@ -22,8 +22,8 @@
   "keywords": [
     "stormify",
     "stormstack",
-    "data-store",
-    "datastore"
+    "data-storm",
+    "stormify-data"
   ],
   "license": "MIT",
   "bugs": {
@@ -33,14 +33,11 @@
   "dependencies": {
     "body-parser": "^1.9.3",
     "bunyan": "1.2.1",
-    "dirty": "0.9.9",
-    "json-schema": "0.2.2",
-    "node-uuid": "1.4.1",
 		"express": "^4.9.0",
     "passport": "^0.2.1",
     "passport-anonymous": "^1.0.1",
     "passport-http-bearer": "^1.0.1",
-    "promise": "^6.0.1"
+    "stormify-data": ">=0.2.0"
   },
   "contributors": [
     "Ravi Chunduru"
