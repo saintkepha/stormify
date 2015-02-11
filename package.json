@@ -1,7 +1,7 @@
 {
   "name": "stormify",
-  "version": "0.4.26",
-  "description": "Stormify enables rapid web applications construction using ember style Data Stores",
+  "version": "0.7.0",
+  "description": "Enable express-ing new DataStorms based on YANG data models with auto-generated RESTCONF APIs",
   "author": "Peter K Lee <peter@intercloud.net>",
   "main": "lib/stormify.js",
   "directories": {
@@ -22,8 +22,10 @@
   "keywords": [
     "stormify",
     "stormstack",
-    "data-store",
-    "datastore"
+    "data-storm",
+    "yang",
+    "restconf",
+    "yang-json"
   ],
   "license": "MIT",
   "bugs": {
@@ -31,14 +33,17 @@
   },
   "homepage": "https://github.com/stormstack/stormify",
   "dependencies": {
-    "async": "0.8.0",
+    "bluebird": "^2.9.7",
+    "body-parser": "^1.9.3",
     "bunyan": "1.2.1",
-    "dirty": "0.9.9",
-    "json-schema": "0.2.2",
+    "express": "^4.9.0",
+    "needle": "^0.7.11",
     "node-uuid": "1.4.1",
-    "passport": "0.2.1",
-    "passport-anonymous": "1.0.1",
-    "promise": "^6.0.1"
+    "passport": "^0.2.1",
+    "passport-anonymous": "^1.0.1",
+    "passport-http-bearer": "^1.0.1",
+    "promise": "^6.0.1",
+    "yang-parser": "^0.1.0"
   },
   "contributors": [
     "Ravi Chunduru"
