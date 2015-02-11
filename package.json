@@ -1,7 +1,7 @@
 {
   "name": "stormify",
-  "version": "0.5.3",
-  "description": "Enable express-ing new DataStorms based on stormify-data data models",
+  "version": "0.7.0",
+  "description": "Enable express-ing new DataStorms based on YANG data models with auto-generated RESTCONF APIs",
   "author": "Peter K Lee <peter@intercloud.net>",
   "main": "lib/stormify.js",
   "directories": {
@@ -23,7 +23,9 @@
     "stormify",
     "stormstack",
     "data-storm",
-    "stormify-data"
+    "yang",
+    "restconf",
+    "yang-json"
   ],
   "license": "MIT",
   "bugs": {
@@ -31,13 +33,17 @@
   },
   "homepage": "https://github.com/stormstack/stormify",
   "dependencies": {
+    "bluebird": "^2.9.7",
     "body-parser": "^1.9.3",
     "bunyan": "1.2.1",
-		"express": "^4.9.0",
+    "express": "^4.9.0",
+    "needle": "^0.7.11",
+    "node-uuid": "1.4.1",
     "passport": "^0.2.1",
     "passport-anonymous": "^1.0.1",
     "passport-http-bearer": "^1.0.1",
-    "stormify-data": ">=0.2.0"
+    "promise": "^6.0.1",
+    "yang-parser": "^0.1.0"
   },
   "contributors": [
     "Ravi Chunduru"
