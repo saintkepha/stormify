@@ -1,11 +1,8 @@
-
 express = require 'express'
 
-DataStorm = require './storm/data-storm'
-YangStorm = require './yang/yang-storm'
+DataStorm = require './data-storm'
 
 module.exports.DS = DataStorm
-module.exports.YS = YangStorm
 
 module.exports.passport = (ds) ->
   passport = require 'passport'
@@ -34,7 +31,41 @@ module.exports.passport = (ds) ->
     else
       passport.authenticate('anonymous', {session:false})
 
-module.exports.ember = (ds) ->
+# module.exports.ember = (ds) ->
+
+
+# bunyan = require 'bunyan'
+
+# Promise = require 'promise'
+
+#   needle = require 'needle'
+#   import: (opts, callback) ->
+#     @assert opts? and opts instanceof Object,
+#       'cannot import without valid options'
+
+#     importSchema = (schema) =>
+#       try
+#         model = @generator.generate schema
+#         prop = @_models.register model, opts
+#         model
+#       catch err
+#         console.log err
+
+#     new Promise (resolve, reject) ->
+
+#       if /\b((?=[a-z0-9-]{1,63}\.)(xn--)?[a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,63}\b/.test(opts.url)
+#         get = Promise.denodeify needle.get
+#         get opts.url
+#         .then (res) -> resolve importSchema res.body
+
+#       else if opts.schema?
+#         resolve importSchema opts.schema, callback
+
+#       else reject 'invalid import arguments'
+
+#     .nodeify callback
+
+
 
 
 ##

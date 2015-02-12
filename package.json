@@ -1,6 +1,6 @@
 {
   "name": "stormify",
-  "version": "0.7.0",
+  "version": "0.7.2",
   "description": "Enable express-ing new DataStorms based on YANG data models with auto-generated RESTCONF APIs",
   "author": "Peter K Lee <peter@intercloud.net>",
   "main": "lib/stormify.js",
@@ -23,6 +23,10 @@
     "stormify",
     "stormstack",
     "data-storm",
+		"yang-storm",
+		"datastore",
+		"datamodel",
+		"model",
     "yang",
     "restconf",
     "yang-json"

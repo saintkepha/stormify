@@ -1,67 +1,25 @@
-# mixin = require './mixin'
-# DynamicResolver    = require './dynamic-resolver'
-# extends mixin DynamicResolver
-#
-assert = require 'assert'
-bunyan = require 'bunyan'
 
-#---------------------------------------------------------------------------------------------------------
-
-EventEmitter = require('events').EventEmitter
-
-#---------------------------------------------------------------------------------------------------------
-
-# Wrapper around underlying DataStore
-#
-# Used during store.open(requestor) in order to provide access context
-# for store operations. Also, DataStore sub-classes can override the
-# store.open call to manipulate the views into the underlying entities
-class StormView
-
-    extend = require('util')._extend
-
-    constructor: (@store, @requestor) ->
-        assert store instanceof DataStore, "cannot provide View without valid DataStore"
-        @entities = extend {}, @store.entities
-        @log = @store.log?.child class: @constructor.name
-        @log ?= new bunyan name: @constructor.name
-
-        #@transactions = []
-
-    createRecord: (args...) ->
-        record = @store.createRecord.apply @, args
-        #@transactions.push create:record
-        record
-
-    deleteRecord: (args...) -> @store.deleteRecord.apply @, args
-    updateRecord: (args...) -> @store.updateRecord.apply @, args
-    findRecord:   (args...) -> @store.findRecord.apply @, args
-    findBy:       (args...) -> @store.findBy.apply @, args
-    find:         (args...) -> @store.find.apply @, args
-
-#---------------------------------------------------------------------------------------------------------
-
-StormModel    = require './storm/storm-model'
-StormObject   = require './storm/storm-object'
+StormModel   = require './storm/storm-model'
+StormObject  = require './storm/storm-object'
 
 class DataStorm extends StormModel
-
-  @meta = name: 'storm'
+  @set storm: 'ds'
+  @extend EventEmitter
 
   # various extensions available from this class object
   @Model  = StormModel
   @Object = StormObject
 
-  # @View       = StormView
-  # @Registry   = StormRegistry
-
   # Storm default properties schema
-  logfile:   @attr 'string', defaultValue: @computed -> "/tmp/#{@constructor.name}-#{@get('id')}.log"
+  #logfile:   @attr 'string', defaultValue: @computed -> "/tmp/#{@constructor.name}-#{@get('id')}.log"
   loglevel:  @attr 'string', defaultValue: 'info'
   datadir:   @attr 'string', defaultValue: '/tmp'
 
   # Allows this DataStorm to be changed via API calls (future)
   #isMutable: @attr 'boolean', defaultValue: true
+
+  # DataStorm can have collection of other storms
+  storms: @hasMany DataStorm, private: true
 
   # DataStorm auto-computed properties
   models: @computed (-> @_models.serialize() )

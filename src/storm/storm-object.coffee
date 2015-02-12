@@ -1,59 +1,10 @@
-Array::unique = ->
-    return @ unless @length > 0
-    output = {}
-    for key in [0..@length-1]
-      val = @[key]
-      switch
-          when typeof val is 'object' and val.id?
-              output[val.id] = val
-          else
-              output[val] = val
-    #output[@[key]] = @[key] for key in [0...@length]
-    value for key, value of output
-
-Array::contains = (query) ->
-    return false if typeof query isnt "object"
-    hit = Object.keys(query).length
-    @some (item) ->
-        match = 0
-        for key, val of query
-            match += 1 if item[key] is val
-        if match is hit then true else false
-
-Array::where = (query) ->
-    return [] if typeof query isnt "object"
-    hit = Object.keys(query).length
-    @filter (item) ->
-        match = 0
-        for key, val of query
-            match += 1 if item[key] is val
-        if match is hit then true else false
-
-Array::without = (query) ->
-    return @ if typeof query isnt "object"
-    @filter (item) ->
-        for key,val of query
-            return true unless item[key] is val
-        false # item matched all query params
-
-Array::pushRecord = (record) ->
-    return null if typeof record isnt "object"
-    @push record unless @contains(id:record.id)
+StormClass = require './storm-class'
 
 class PropertyValidationError extends Error
 
-class StormClass
-  @extend:  (obj) ->
-    @[k] = v for k, v of obj
-    this
-  @include: (obj) ->
-    @::[k] = v for k, v of obj
-    this
-
-  # everyone should have this...
-  assert: require 'assert'
-
 class StormProperty extends StormClass
+  @set storm: 'property'
+
   kind: 'attr'
 
   constructor: (@type, @opts={}, @obj) ->
@@ -156,6 +107,8 @@ class StormProperty extends StormClass
         @value
 
 class ComputedProperty extends StormProperty
+  @set storm: 'computed'
+
   kind: 'computed'
   ###*
   # @property func
@@ -164,6 +117,8 @@ class ComputedProperty extends StormProperty
   @func = -> null
 
   constructor: (@func, opts={}, obj) ->
+    console.log 'computed'
+    console.log @func
     @assert typeof @func is 'function',
       "cannot register a new ComputedProperty without a function"
     type = opts.type ? 'computed'
@@ -183,24 +138,23 @@ class ComputedProperty extends StormProperty
   serialize: -> super @get()
 
 class StormObject extends StormClass
-  #@attr      = (type, opts) -> stormify: -> new StormProperty type, opts, this
-  #@computed  = (func, opts) -> stormify: -> new ComputedProperty func, opts, this
+  @set storm: 'object'
 
   @attr = (type, opts) ->
     class extends StormProperty
-      @extend type: type, opts: opts
+      @set type: type, opts: opts
 
   @computed  = (func, opts) ->
     class extends ComputedProperty
-      @extend type: func, opts: opts
+      @set type: func, opts: opts
 
   @Property = StormProperty
   @ComputedProperty = ComputedProperty
 
   constructor: (data, @opts={}) ->
     @_properties = {}
-    for key, val of this when key isnt 'constructor' and val instanceof Function and val.name is '_Class'
-      @addProperty key, (new val val.type, val.opts, this) # (val.stormify.call this)
+    for key, val of this when key isnt 'constructor' and val.meta?.storm?
+      @addProperty key, (new val (val.get 'type'), (val.get 'opts'), this)
 
     # initialize all properties to defaultValues
     @everyProperty (key) -> @set undefined, skipValidation: true
@@ -214,8 +168,23 @@ class StormObject extends StormClass
     property
 
   removeProperty: (key) -> delete @_properties[key] if @hasProperty key
-  getProperty: (key) -> @_properties[key] if @hasProperty key
   hasProperty: (key) -> @_properties.hasOwnProperty key
+
+  ###*
+  # `getProperty` supports retrieving property based on composite key such as:
+  # 'hello.world.bye'
+  #
+  # Since this routine is the primary function for get/set operations,
+  # you can also use it to specify nested path during those operations.
+  ###
+  getProperty: (key) ->
+    composite = key.split '.'
+    key = composite.shift()
+    prop = @_properties[key] if @hasProperty key
+    for key in composite
+      return unless prop?
+      prop = prop.getProperty? key
+    prop
 
   get: (keys...) ->
     result = {}
@@ -235,6 +204,14 @@ class StormObject extends StormClass
   # obj.set hello:'world'
   #
   # { hello: 'world' }
+  #
+  # obj.set test:'a', sample:'b'
+  #
+  # obj.set 'test.nested.param':'a', sample:'b'
+  #
+  # also takes in `opts` as an optional param object to override
+  # validations and other special considerations during the `set`
+  # execution.
   ###
   set: (obj, opts) ->
     return unless obj instanceof Object

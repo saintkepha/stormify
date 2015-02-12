@@ -47,6 +47,8 @@ class RegistryProperty extends StormObject.Property
         delete @value[keys]
 
 
+EventEmitter = require('events').EventEmitter
+
 ###*
 # StormRegistry
 #
@@ -60,6 +62,8 @@ class RegistryProperty extends StormObject.Property
 # remove()
 ###
 class StormRegistry extends StormObject
+  @set storm: 'registry'
+  @include EventEmitter
 
   @Property = RegistryProperty
 

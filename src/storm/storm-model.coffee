@@ -3,6 +3,7 @@ StormObject = require './storm-object'
 assert = require 'assert'
 
 class RelationshipProperty extends StormObject.Property
+  @set storm: 'relation'
 
   kind: null
 
@@ -11,9 +12,6 @@ class RelationshipProperty extends StormObject.Property
         "cannot register a new relationship without proper model class"
     assert obj instanceof StormModel,
         "cannot register a new relationship without containing obj defined"
-
-    # unless @model instanceof StormModel
-    #   @model = new @model
 
     type = switch @kind
         when 'belongsTo' then 'string'
@@ -25,6 +23,7 @@ class RelationshipProperty extends StormObject.Property
   #serialize: -> super @get()
 
 class BelongsToProperty extends RelationshipProperty
+  @set storm: 'belongsTo'
 
   kind: 'belongsTo'
 
@@ -54,6 +53,7 @@ class BelongsToProperty extends RelationshipProperty
       super
 
 class HasManyProperty extends RelationshipProperty
+  @set storm: 'hasMany'
 
   kind: 'hasMany'
 
@@ -123,20 +123,19 @@ class ModelRegistry extends StormRegistry
   contains: (key) -> (@getProperty key)
 
 class StormModel extends StormObject
-
-  @meta = name: 'storm:model'
+  @set storm: 'model'
 
   @belongsTo = (model, opts) ->
     class extends BelongsToProperty
-      @extend type: model, opts: opts
+      @set type: model, opts: opts
 
   @hasMany = (model, opts) ->
     class extends HasManyProperty
-      @extend type: model, opts: opts
+      @set type: model, opts: opts
 
   @action = (func, opts)  ->
     class extends ActionProperty
-      @extend type: func, opts: opts
+      @set type: func, opts: opts
 
   @RelationshipProperty = RelationshipProperty
   @HasManyProperty = HasManyProperty
@@ -156,7 +155,7 @@ class StormModel extends StormObject
   # instance visible across ALL model instances (intentionally
   # undocumented)
   #
-  # It is publicly accessible via the Storm class
+  # It is publicly accessible via the DataStorm class
   _models: new ModelRegistry
 
   constructor: (data) ->
@@ -210,14 +209,19 @@ class StormModel extends StormObject
       record.destroy() for record in @get '_bindings'
       @_models.remove this
 
+  Promise = require 'promise'
+  invoke: (action, args...) ->
+    func = switch
+      when action instanceof Function then action
+      when (prop = @getProperty action)?
+        using = prop.using?()
+        @[using]
+      else null
 
-  # @Promise = require 'promise'
-  # # a method to invoke a registered promised action on the record
-  # invoke: (action, params, data) ->
-  #     new @Promise (resolve,reject) =>
-  #         try
-  #             resolve @_actions[action]?.call(this, params, data)
-  #         catch err
-  #             reject err
+    new Promise (resolve, reject) =>
+      try
+        resolve func?.apply this, args
+      catch err
+        reject err
 
 module.exports = StormModel
