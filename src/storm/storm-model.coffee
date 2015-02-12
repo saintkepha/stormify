@@ -211,16 +211,10 @@ class StormModel extends StormObject
 
   Promise = require 'promise'
   invoke: (action, args...) ->
-    func = switch
-      when action instanceof Function then action
-      when (prop = @getProperty action)?
-        using = prop.using?()
-        @[using]
-      else null
-
+    name = (@getProperty action)?.constructor.get 'name'
     new Promise (resolve, reject) =>
       try
-        resolve func?.apply this, args
+        resolve @[name]?.apply this, args
       catch err
         reject err
 

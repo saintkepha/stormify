@@ -31,7 +31,7 @@ class YangList extends YangProperty
 class YangRemoteProcedure extends YangObject
 
 
-class Yang extends StormClass
+class YangClass extends StormClass
   @set
     module:   YangModule
     grouping: YangGrouping
@@ -66,4 +66,4 @@ class Yang extends StormClass
         @extend statics
         @include functions
 
-module.exports = Yang
+module.exports = YangClass

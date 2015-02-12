@@ -1,4 +1,3 @@
-
 StormModel   = require './storm/storm-model'
 StormObject  = require './storm/storm-object'
 
