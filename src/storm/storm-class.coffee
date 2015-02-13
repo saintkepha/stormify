@@ -53,15 +53,16 @@ class StormClass
     @::[k] = v for k, v of obj
     this
 
-  @toJSON: (tag=true) ->
+  @toJSON: (type='storm', tag=true) ->
     o = {}
     for k, v of this when v not instanceof Function and k isnt '__super__' and k isnt 'meta'
       o[k] = v
     for k, v of this.prototype when k isnt 'constructor' and v.meta?.storm?
-      prefix = v.meta.storm+':'
-      o[prefix+k] = v.toJSON? false
+      continue unless (v.get type)?
+      prefix = (v.get type) + ':'
+      o[prefix+k] = v.toJSON? type, false
     if tag is true
-      prefix = @meta.storm
+      prefix = (@get type)
       prefix += ':' + @meta.name if @meta.name?
       t = {}
       t[prefix] = o

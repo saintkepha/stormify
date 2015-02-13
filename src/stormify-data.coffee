@@ -2,8 +2,7 @@ StormModel   = require './storm/storm-model'
 StormObject  = require './storm/storm-object'
 
 class DataStorm extends StormModel
-  @set storm: 'ds'
-  @extend EventEmitter
+  @set storm: 'datastorm', name: 'stormify-data', models: new ModelRegistry
 
   # various extensions available from this class object
   @Model  = StormModel
@@ -21,7 +20,7 @@ class DataStorm extends StormModel
   storms: @hasMany DataStorm, private: true
 
   # DataStorm auto-computed properties
-  models: @computed (-> @_models.serialize() )
+  models: @computed (-> (@constructor.get 'models').serialize() )
 
   ###*
   # `addProperty` for DataStorm checks for new hasMany relationships

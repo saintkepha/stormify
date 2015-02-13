@@ -1,15 +1,15 @@
 StormModel  = require '../storm/storm-model'
 
-map = require './yang-generator-map'
+spec = require './yang-core-spec-v1'
 
 class YangModule extends StormModel
-  @set storm: 'module'
+  @set yang: 'module'
 
   @toYANG: ->
     convert = (json, offset=0) ->
       return json unless json instanceof Object
       res = ''
-      for k, v of json when map.hasOwnProperty (k.split ':')[0]
+      for k, v of json when spec.hasOwnProperty (k.split ':')[0]
         res += (Array(offset).join ' ') + k.replace(':',' ') + ' '
         unless v instanceof Object
           res += switch k
@@ -26,7 +26,13 @@ class YangModule extends StormModel
           res += (convert v, offset+2)
           res += (Array(offset).join ' ') + "}\n\n"
       res
-    convert @toJSON true
+    convert @toJSON 'yang', true
+
+  constructor: ->
+    super
+    # a simple name remapping
+    @_modules = @_models
+    this
 
   serialize: (format='json') ->
     o = {}
@@ -36,8 +42,10 @@ class YangModule extends StormModel
       #   return
       value = @serialize()
       return unless value?
-      return if value instanceof Object and Object.keys(value).length is 0
       o[prefix+':'+key] = value
     o
+
+  # invoke: (rpc, args...) ->
+  #   super
 
 module.exports = YangModule

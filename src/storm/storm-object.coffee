@@ -151,10 +151,14 @@ class StormObject extends StormClass
   @Property = StormProperty
   @ComputedProperty = ComputedProperty
 
-  constructor: (data, @opts={}) ->
+  constructor: (data, @opts={}, @container) ->
     @_properties = {}
-    for key, val of this when key isnt 'constructor' and val.meta?.storm?
-      @addProperty key, (new val (val.get 'type'), (val.get 'opts'), this)
+    for key, StormForm of this when key isnt 'constructor' and StormForm?.meta?.storm?
+      input = switch (StormForm.get 'storm')
+        when 'object' then 'data'
+        else 'type'
+
+      @addProperty key, (new StormForm (StormForm.get input), (StormForm.get 'opts'), this)
 
     # initialize all properties to defaultValues
     @everyProperty (key) -> @set undefined, skipValidation: true
@@ -178,7 +182,8 @@ class StormObject extends StormClass
   # you can also use it to specify nested path during those operations.
   ###
   getProperty: (key) ->
-    composite = key.split '.'
+    return unless key?
+    composite = key?.split '.'
     key = composite.shift()
     prop = @_properties[key] if @hasProperty key
     for key in composite

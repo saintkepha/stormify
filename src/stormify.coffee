@@ -2,72 +2,6 @@ express = require 'express'
 
 DataStorm = require './data-storm'
 
-module.exports.DS = DataStorm
-
-module.exports.passport = (ds) ->
-  passport = require 'passport'
-  BearerStrategy = require 'passport-http-bearer'
-  AnonymousStrategy = require 'passport-anonymous'
-
-  @use passport.initialize()
-
-  passport.use new AnonymousStrategy
-
-  authorizer = (store) ->
-    if store.authorizer? and store.authorizer instanceof DataStorm
-      passport.use new BearerStrategy (token,done) ->
-          token = store.authorizer.findRecord 'token', token
-          # should verify that it is AuthorizationToken once we bundle that in stormify
-          if token? and token instanceof DataStorm.Model
-              identity = token.get('identity')
-              session = token.get('session')
-              if identity? and session?
-                  return done null, session, { scope: identity.get('scope') }
-
-          # default case is unauthorized...
-          done null, false
-
-      passport.authenticate('bearer', {session:false})
-    else
-      passport.authenticate('anonymous', {session:false})
-
-# module.exports.ember = (ds) ->
-
-
-# bunyan = require 'bunyan'
-
-# Promise = require 'promise'
-
-#   needle = require 'needle'
-#   import: (opts, callback) ->
-#     @assert opts? and opts instanceof Object,
-#       'cannot import without valid options'
-
-#     importSchema = (schema) =>
-#       try
-#         model = @generator.generate schema
-#         prop = @_models.register model, opts
-#         model
-#       catch err
-#         console.log err
-
-#     new Promise (resolve, reject) ->
-
-#       if /\b((?=[a-z0-9-]{1,63}\.)(xn--)?[a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,63}\b/.test(opts.url)
-#         get = Promise.denodeify needle.get
-#         get opts.url
-#         .then (res) -> resolve importSchema res.body
-
-#       else if opts.schema?
-#         resolve importSchema opts.schema, callback
-
-#       else reject 'invalid import arguments'
-
-#     .nodeify callback
-
-
-
-
 ##
 # Create an instance of stormify express app to be used by the
 # invoking routine to mount as a sub-app or to run as the primary app
@@ -103,12 +37,45 @@ module.exports.passport = (ds) ->
 # `express`
 #
 # app = stormify.express datastorm
-module.exports.express = (ds) ->
-  assert = require 'assert'
 
-  assert ds instanceof DataStorm,
-    'cannot express without valid DataStorm passed-in'
+class Stormify extends DataStorm
 
+  @express = (storm) ->
+
+    @assert storm instanceof DataStorm.Model,
+      'cannot express without valid DataStorm passed-in'
+
+    router = (require 'express').Router()
+
+    router.all '*', (authorizer storm), (req,res,next) ->
+      #req.storm = ds.open req.user
+      req.storm = storm
+      next()
+
+    router.route "#{storm.constructor.get 'name'}"
+    .all (req, res, next) ->
+        # XXX - verify req.user has permissions to operate on the DataStorm
+        #
+        next()
+    .get (req, res, next) ->
+        res.locals.result = req.storm.serialize()
+        next()
+    .post (req, res, next) ->
+        # XXX - Enable creation of a new collection into the target DataStorm
+        next()
+    .copy (req, res, next) ->
+        # XXX - generate JSON serialized copy of this DataStorm
+        next()
+
+    # always send back contents of 'result' if available
+    router.use (req, res, next) ->
+        unless res.locals.result? then return next 'route'
+        res.setHeader 'Expires','-1'
+        res.send res.locals.result
+        next()
+
+
+test = ->
   app = express()
   bp = require 'body-parser'
 
@@ -143,15 +110,11 @@ module.exports.express = (ds) ->
       req.action = req.record.invoke action, req.query, req.body # returns a Promise
       if req.action? then next() else next('route')
 
-  router.all '*', (authorizer ds), (req,res,next) ->
-      #req.storm = ds.open req.user
-      req.storm = ds
-      next()
 
   ##
   # provide handling of this DataStorm
   ##
-  router.route "/"
+  router.route "#{storm.constructor.get 'name'}"
   .all (req, res, next) ->
       # XXX - verify req.user has permissions to operate on the DataStorm
       #
@@ -314,6 +277,38 @@ module.exports.express = (ds) ->
   app.use router
   return app
 
+
+
+module.exports.DS = DataStorm
+
+module.exports.passport = (ds) ->
+  passport = require 'passport'
+  BearerStrategy = require 'passport-http-bearer'
+  AnonymousStrategy = require 'passport-anonymous'
+
+  @use passport.initialize()
+
+  passport.use new AnonymousStrategy
+
+  authorizer = (store) ->
+    if store.authorizer? and store.authorizer instanceof DataStorm
+      passport.use new BearerStrategy (token,done) ->
+          token = store.authorizer.findRecord 'token', token
+          # should verify that it is AuthorizationToken once we bundle that in stormify
+          if token? and token instanceof DataStorm.Model
+              identity = token.get('identity')
+              session = token.get('session')
+              if identity? and session?
+                  return done null, session, { scope: identity.get('scope') }
+
+          # default case is unauthorized...
+          done null, false
+
+      passport.authenticate('bearer', {session:false})
+    else
+      passport.authenticate('anonymous', {session:false})
+
+
 #----------------------
 # OLD DEPRECATED METHOD
 #----------------------
@@ -360,5 +355,42 @@ module.exports.serve = (store,opts) ->
 
         store.log?.info method:"serve",
             "auto-generated REST endpoints at: #{baseUrl}/#{collection}"
+
+
+# module.exports.ember = (ds) ->
+
+
+# bunyan = require 'bunyan'
+
+# Promise = require 'promise'
+
+#   needle = require 'needle'
+#   import: (opts, callback) ->
+#     @assert opts? and opts instanceof Object,
+#       'cannot import without valid options'
+
+#     importSchema = (schema) =>
+#       try
+#         model = @generator.generate schema
+#         prop = @_models.register model, opts
+#         model
+#       catch err
+#         console.log err
+
+#     new Promise (resolve, reject) ->
+
+#       if /\b((?=[a-z0-9-]{1,63}\.)(xn--)?[a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,63}\b/.test(opts.url)
+#         get = Promise.denodeify needle.get
+#         get opts.url
+#         .then (res) -> resolve importSchema res.body
+
+#       else if opts.schema?
+#         resolve importSchema opts.schema, callback
+
+#       else reject 'invalid import arguments'
+
+#     .nodeify callback
+
+
 
 

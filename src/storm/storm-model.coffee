@@ -140,7 +140,6 @@ class StormModel extends StormObject
   @RelationshipProperty = RelationshipProperty
   @HasManyProperty = HasManyProperty
   @BelongsToProperty = BelongsToProperty
-  @Registry = ModelRegistry
 
   # default schema for all StormModels
   id:         @attr 'string', private: true, defaultValue: -> (require 'node-uuid').v4()
@@ -158,8 +157,8 @@ class StormModel extends StormObject
   # It is publicly accessible via the DataStorm class
   _models: new ModelRegistry
 
-  constructor: (data) ->
-    super data
+  constructor: ->
+    super
     @_models.register @constructor
     @_models.add this
 
@@ -211,10 +210,11 @@ class StormModel extends StormObject
 
   Promise = require 'promise'
   invoke: (action, args...) ->
-    name = (@getProperty action)?.constructor.get 'name'
     new Promise (resolve, reject) =>
       try
-        resolve @[name]?.apply this, args
+        unless action instanceof Function
+          action = (@getProperty action)?.exec
+        resolve (action?.apply this, args)
       catch err
         reject err
 
