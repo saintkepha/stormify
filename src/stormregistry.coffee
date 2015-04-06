@@ -51,9 +51,15 @@ class StormRegistry extends EventEmitter
         else
             process.nextTick => @emit 'ready'
 
+    getKey: (key) ->
+        return unless key? and @entries.hasOwnProperty(key)
+        @entries[key]
+
     add: (key, entry) ->
         return unless entry?
-        @remove key if @get key
+        if @getKey key
+            @remove key
+            entry.saved = false
 
         key ?= uuid.v4() # if no key provided, dynamically generate one
         entry.id ?= key
