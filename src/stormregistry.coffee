@@ -58,7 +58,7 @@ class StormRegistry extends EventEmitter
     add: (key, entry) ->
         return unless entry?
         if @getKey key
-            return @remove key, entry, true
+            return @update key, entry, true
 
         key ?= uuid.v4() # if no key provided, dynamically generate one
         entry.id ?= key
