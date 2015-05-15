@@ -1,5 +1,6 @@
 EventEmitter = require('events').EventEmitter
-
+Mongo = require 'mongoskin'
+Promise = require 'promise'
 class StormRegistryData
 
     validate = require('json-schema').validate
@@ -15,6 +16,64 @@ class StormRegistryData
         JSON.stringify @data
 
 #---------------------------------------------------------------------------------------------------------
+class MongoRegistry
+    constructor: (opt) ->
+        @url = opts.url
+        # Mongo.db(@url,native_parser:true)
+        @db = opts.db
+        @collection = opts.collection
+
+    add: (key, entry) ->
+        Promise (fulfill, reject) =>
+            @db.collection(@collection).insert entry, (err, result)=>
+                if err?
+                    reject(err)
+                else
+                    fullfill(result)
+
+    #search for one result
+    get: (key) ->
+        Promise (fullfill,reject) =>
+            @db.collection(@collection).findOne key ,(err,result) =>
+                if err?
+                    reject(err)
+                else
+                    fullfill(result)
+
+    #do something on every record found
+    find: (key) ->
+        Promise (fullfill,reject) =>
+            @db.collection(@collection).find(key, (err,result) =>
+                if err?
+                    reject(err)
+                else
+                    result.each (err,record)=>
+                        fullfull(record)
+
+    remove: (key) ->
+        Promise (fullfill, reject) =>
+            @db.remove key, (err,result) =>
+                if err?
+                    reject(err)
+                else
+                    fullfill(result)
+
+    update: (key,entry,suppress) ->
+        Promise (fullfill, reject) =>
+            @db.collection(@collection).update key,entry, (err,result) =>
+                if err?
+                    reject(err)
+                else
+                    fullfill(result)
+
+    list: () ->
+        Promise (fullfill, reject) =>
+            @db.collection(@collection).find (err,result) =>
+                if err?
+                    reject(err)
+                else
+                    fullfill(result)
+
 
 class StormRegistry extends EventEmitter
 
