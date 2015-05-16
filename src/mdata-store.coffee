@@ -6,68 +6,29 @@ assert = require 'assert'
 bunyan = require 'bunyan'
 
 #---------------------------------------------------------------------------------------------------------
-
-SR = require './stormregistry'
+MongoRegistry = require('stormregistry').MongoRegistry
+StormRegistryData = require('stormregistry').StormRegistryData
 #-----------------------------------
 # DataStoreRegistry
 #
 # Uses deferred DataStoreModel instantiation to take place only on @get
 #
-class DataStoreRegistry extends SR
 
-    constructor: (@collection,opts) ->
+class MongoStoreRegistry extends MongoRegistry
+    constructor: (@collection, opts) ->
         @store = opts?.store
         assert @store? and @store.contains(@collection), "cannot construct DataStoreRegistry without valid store containing '#{collection}' passed in"
-
         @log = opts?.log?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
-
         @entity = @store.contains(@collection)
-
-        @on 'load', (key,val) ->
-            @log.debug entity:@entity.name,key:key,'loading a persisted record'
-            entry = val?[@entity.name]
-            if entry?
-                entry.id = key
-                entry.saved = true
-                @add key, entry
-        @on 'ready', ->
-            size = Object.keys(@entries)?.length
-            @log.info entity:@entity.name,size:size,"registry for '#{@collection}' initialized with #{size} records"
 
         super
             log: @log
-            path: "#{@store.datadir}/#{@collection}.db" if opts?.persist
-
-    keys: -> Object.keys(@entries)
-
-    get: (id) ->
-        entry = super id
-        return null unless entry?
-        unless entry instanceof DataStoreModel
-            @log.debug id:id, "restoring #{@entity.name} from registry using underlying entry"
-
-            # we try here since we don't know if we can successfully createRecord during restoration!
-            try
-                record = @store.createRecord @entity.name, entry
-                record.isSaved = true
-                @update id, record, true
-            catch err
-                @log.warn method:'get',id:id,error:err, "issue while trying to restore a record of '#{@entity.name}' from registry"
-                return null
-
-        super id
-
-    # this overrides parent registry.update call to suppress event
-    # emit and instead provide additional details (changed properties) with the event
-    update: (key, entry, suppress) ->
-        super key, entry, true # force suppressing event
-        @emit 'updated', entry, entry.dirtyProperties() unless suppress is true
-        entry
+            collection: @collection
 
 #---------------------------------------------------------------------------------------------------------
 
-class DataStoreModel extends SR.StormRegistryData
+class DataStoreModel extends StormRegistryData
 
     @attr      = (type, opts)  -> type: type, opts: opts
     @belongsTo = (model, opts) -> mode: 1, model: model, opts: opts
@@ -119,6 +80,7 @@ class DataStoreModel extends SR.StormRegistryData
 
         # verify basic schema compliance during construction
         violations = []
+
         for name,prop of @properties
             #console.log name
             prop.value ?= switch

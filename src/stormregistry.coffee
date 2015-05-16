@@ -16,13 +16,13 @@ class StormRegistryData
         JSON.stringify @data
 
 #---------------------------------------------------------------------------------------------------------
-class MongoRegistry
+class MongoRegistry extends EventEmitter
     constructor: (opt) ->
         @url = opts.url
         # Mongo.db(@url,native_parser:true)
         @db = opts.db
         @collection = opts.collection
-
+        @emit 'ready'
     add: (key, entry) ->
         Promise (fulfill, reject) =>
             @db.collection(@collection).insert entry, (err, result)=>
@@ -30,6 +30,7 @@ class MongoRegistry
                     reject(err)
                 else
                     fullfill(result)
+                    @emit 'added', entry
 
     #search for one result
     get: (key) ->
@@ -43,7 +44,7 @@ class MongoRegistry
     #do something on every record found
     find: (key) ->
         Promise (fullfill,reject) =>
-            @db.collection(@collection).find(key, (err,result) =>
+            @db.collection(@collection).find key, (err,result) =>
                 if err?
                     reject(err)
                 else
@@ -65,6 +66,7 @@ class MongoRegistry
                     reject(err)
                 else
                     fullfill(result)
+                    @emit 'updated', entry,entry.dirtyProperties unless suppress is true
 
     list: () ->
         Promise (fullfill, reject) =>
@@ -201,4 +203,5 @@ class StormRegistry extends EventEmitter
         )
 
 module.exports = StormRegistry
-module.exports.Data = StormRegistryData
+module.exports.StormRegistryData = StormRegistryData
+module.exports.MongoRegistry = MongoRegistry
