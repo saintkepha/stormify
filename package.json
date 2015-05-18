@@ -30,7 +30,10 @@
     "url": "https://github.com/stormstack/stormify/issues"
   },
   "homepage": "https://github.com/stormstack/stormify",
-  "dependencies": {
+    "dependencies": {
+	"mongoskin":"1.4.13",
+	"mongodb":"1.4",
+	"chai":"2.3.0",
     "async": "0.8.0",
     "bunyan": "1.2.1",
     "dirty": "0.9.9",

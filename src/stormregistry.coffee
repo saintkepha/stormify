@@ -17,50 +17,53 @@ class StormRegistryData
 
 #---------------------------------------------------------------------------------------------------------
 class MongoRegistry extends EventEmitter
-    constructor: (opt) ->
+    constructor: (opts) ->
         @url = opts.url
         # Mongo.db(@url,native_parser:true)
         @db = opts.db
         @collection = opts.collection
         @emit 'ready'
     add: (key, entry) ->
-        Promise (fulfill, reject) =>
-            @db.collection(@collection).insert entry, (err, result)=>
+        new Promise (fullfill, reject) =>
+            @db.collection(@collection).insert entry, (err, result)->
                 if err?
                     reject(err)
                 else
-                    fullfill(result)
+                    if result.length>0
+                        fullfill(result[0])
+                    else
+                        fullfill(result)
+
                     @emit 'added', entry
 
     #search for one result
     get: (key) ->
-        Promise (fullfill,reject) =>
+        new Promise (fullfill,reject) =>
             @db.collection(@collection).findOne key ,(err,result) =>
                 if err?
                     reject(err)
                 else
                     fullfill(result)
 
-    #do something on every record found
+    #find one or more records
     find: (key) ->
-        Promise (fullfill,reject) =>
+        new Promise (fullfill,reject) =>
             @db.collection(@collection).find key, (err,result) =>
                 if err?
                     reject(err)
                 else
-                    result.each (err,record)=>
-                        fullfull(record)
+                    fullfill(result)
 
     remove: (key) ->
-        Promise (fullfill, reject) =>
-            @db.remove key, (err,result) =>
+        new Promise (fullfill, reject) =>
+            @db.collection(@collection).remove key, (err,result) =>
                 if err?
                     reject(err)
                 else
                     fullfill(result)
 
     update: (key,entry,suppress) ->
-        Promise (fullfill, reject) =>
+        new Promise (fullfill, reject) =>
             @db.collection(@collection).update key,entry, (err,result) =>
                 if err?
                     reject(err)
@@ -69,8 +72,8 @@ class MongoRegistry extends EventEmitter
                     @emit 'updated', entry,entry.dirtyProperties unless suppress is true
 
     list: () ->
-        Promise (fullfill, reject) =>
-            @db.collection(@collection).find (err,result) =>
+        new Promise (fullfill, reject) =>
+            @db.collection(@collection).find {}, (err,result) =>
                 if err?
                     reject(err)
                 else
@@ -202,6 +205,6 @@ class StormRegistry extends EventEmitter
                 @log.warn method:'expires', "registry stopped running, validity checker stopping..."
         )
 
-module.exports = StormRegistry
+module.exports.StormRegistry = StormRegistry
 module.exports.StormRegistryData = StormRegistryData
 module.exports.MongoRegistry = MongoRegistry
