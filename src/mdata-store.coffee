@@ -21,10 +21,10 @@ class MongoStoreRegistry extends MongoRegistry
         @log = opts?.log?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
         @entity = @store.contains(@collection)
-
         super
             log: @log
             collection: @collection
+            db : opts.db
 
 #---------------------------------------------------------------------------------------------------------
 

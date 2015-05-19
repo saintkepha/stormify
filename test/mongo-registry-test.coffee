@@ -46,6 +46,15 @@ describe 'MongoRegistry', ()->
                 console.log 'Not Found record'
                 done()
 
+    describe "#count()", ()->
+        it 'should count the records found', (done) ->
+            mongo.count()
+            .then (result) ->
+                expect(result).to.equal(1)
+                done()
+            , (err) ->
+                console.log 'Not Found record'
+                done()
     describe "#find()", ()->
         it 'should fetch the records found', (done) ->
             mongo.find {_id: helper.toObjectID('555a60931af4146454ba6f92')}

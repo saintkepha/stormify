@@ -23,6 +23,16 @@ class MongoRegistry extends EventEmitter
         @db = opts.db
         @collection = opts.collection
         @emit 'ready'
+
+    count: (query) ->
+        new Promise (fullfill, reject) =>
+            query = {} unless query
+            @db.collection(@collection).count query, (err,count)->
+                if err?
+                    reject(err)
+                else
+                    fullfill(count)
+
     add: (key, entry) ->
         new Promise (fullfill, reject) =>
             @db.collection(@collection).insert entry, (err, result)->
