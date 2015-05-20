@@ -14,13 +14,15 @@ StormRegistryData = require('stormregistry').StormRegistryData
 # Uses deferred DataStoreModel instantiation to take place only on @get
 #
 
-class MongoStoreRegistry extends MongoRegistry
+class DataStoreRegistry extends MongoRegistry
     constructor: (@collection, opts) ->
         @store = opts?.store
-        assert @store? and @store.contains(@collection), "cannot construct DataStoreRegistry without valid store containing '#{collection}' passed in"
+
+        assert @store? and @store.contains(@collection), "cannot construct DataStoreRegistry without valid store containing '#{@collection}' passed in"
         @log = opts?.log?.child class: @constructor.name
         @log ?= new bunyan name: @constructor.name
         @entity = @store.contains(@collection)
+
         super
             log: @log
             collection: @collection
@@ -557,7 +559,8 @@ class DataStore extends EventEmitter
 
     constructor: (opts) ->
         @name ?= opts?.name
-
+        @db ?=opts?.db
+        assert @db?, 'cannot construct Mongo DataStore without a valid DB instance'
         assert @name?, "cannot construct DataStore without naming this store!"
 
         @log = opts?.auditor?.child class: @constructor.name
@@ -570,19 +573,16 @@ class DataStore extends EventEmitter
         @authorizer = opts?.authorizer
 
         @isReady = false
-        @datadir = opts?.datadir ? '/tmp'
 
         # if @constructor.name != 'DataStore'
         #   assert Object.keys(@entities).length > 0, "cannot have a data store without declared entities!"
 
     initialize: ->
         return if @isReady
-
-        console.log "initializing a new DataStore: #{@name}"
         @log.info method:'initialize', 'initializing a new DataStore: %s', @name
         for collection, entity of @collections
             do (collection,entity) =>
-                entity.registry ?= new DataStoreRegistry collection, log:@log,store:@,persist:entity.persist
+                entity.registry ?= new DataStoreRegistry collection, db:@db,log:@log,store:@,persist:entity.persist
                 if entity.static?
                     entity.registry.once 'ready', =>
                         @log.info collection:collection, 'loading static records for %s', collection
@@ -600,7 +600,6 @@ class DataStore extends EventEmitter
             @authorizer.references @contains 'sessions'
 
         @log.info method:'initialize', 'initialization complete for: %s', @name
-        console.log "initialization complete for: #{@name}"
         @isReady = true
         # this is not guaranteed to fire when all the registries have been initialized
         process.nextTick => @emit 'ready'
